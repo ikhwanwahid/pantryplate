@@ -170,7 +170,20 @@ The 11 in one-liner form:
 
 ## 4b. Pick a model to build — coordination table
 
-**How to claim a model**: edit the **Owner** column in this table, set **Status** to 🟡, push. First push wins. If a conflict happens, sort it out at the next standup. The table is the single source of truth for who's building what.
+**How to claim a model**: open a PR against `main` that edits the **Owner** column in this table and sets **Status** to 🟡. The PR needs 1 approval from a teammate before it merges. First *merged* PR wins. The table (on `main`) is the single source of truth for who's building what.
+
+Quick claim workflow:
+
+```bash
+git checkout main && git pull
+git checkout -b docs/claim-<model>-<yourname>
+# edit docs/week2_onboarding.md — set Status to 🟡 and your name to Owner
+git add docs/week2_onboarding.md
+git commit -m "Claim <model> — <yourname>"
+git push -u origin docs/claim-<model>-<yourname>
+gh pr create --title "Claim <model>" --body "Section 4b update."
+# Ping a teammate for approval, then merge via GitHub UI
+```
 
 ### Stage 1 models — coordination
 
@@ -295,12 +308,39 @@ uv run python -m src.models.my_model
 
 ### Git workflow
 
-We're a small team (5 people) for 3 weeks — no need for elaborate branching. **Everyone works on `main`.**
+**`main` is protected** — direct pushes are blocked except for the repo admin. Everyone else uses a feature branch + pull request, requires 1 review approval before merge.
 
-**Before pushing**:
-1. `git pull --rebase` — gets latest, rebases your commits cleanly on top
-2. Re-run tests (`uv run pytest tests/ -q`) to make sure nothing broke
-3. `git push`
+**Standard PR workflow** (memorize this):
+
+```bash
+# 1. Start from latest main
+git checkout main && git pull
+
+# 2. Create a feature branch
+git checkout -b <type>/<short-description>-<yourname>
+# Example: model/bpr-alekhya
+
+# 3. Make your changes, run tests, commit
+uv run pytest tests/ -q
+git add <files>
+git commit -m "<verb> <what>"
+
+# 4. Push the branch
+git push -u origin <type>/<short-description>-<yourname>
+
+# 5. Open a PR (either CLI or browser)
+gh pr create --title "..." --body "..."
+# Or visit: https://github.com/ikhwanwahid/pantryplate/pulls
+
+# 6. Ping a teammate for 1 approval, then "Squash and merge" via GitHub UI
+```
+
+**Branch naming convention**:
+
+- `model/<name>-<author>` — Stage 1 models (e.g., `model/bpr-alekhya`)
+- `feature/<short-desc>` — non-model features (e.g., `feature/streamlit-demo`)
+- `fix/<short-desc>` — bug fixes
+- `docs/<short-desc>` — doc-only changes (e.g., `docs/claim-ease-koh`)
 
 **Commit message conventions** (lightweight):
 
@@ -314,26 +354,21 @@ Examples:
   Refactor staples — drop chicken broth for vegan personas
 ```
 
-**To claim a model from §4b's table**:
+**Handling conflicts on shared files**: if `main` has moved while your PR was open and there's a merge conflict:
 
 ```bash
-git pull
-# edit docs/week2_onboarding.md — change Status to 🟡 and add your name to Owner
-git add docs/week2_onboarding.md
-git commit -m "Claim <model name> — <your name>"
-git push
+git checkout <your-branch>
+git fetch origin
+git rebase origin/main          # rebase your work on top of latest main
+# resolve any conflicts: edit file, git add <file>, git rebase --continue
+git push --force-with-lease     # safe force-push only to your own branch
 ```
 
-If two people race to claim the same model: the second push will fail on merge conflict. Pull, pick a different model, push again. No bad blood — just standup-resolve over coffee.
-
-**Conflict on shared files**: if you and a teammate both edited the same file:
-1. `git pull --rebase` shows the conflict
-2. Open the file, look for `<<<<<<<` / `=======` / `>>>>>>>` markers
-3. Edit to resolve, save
-4. `git add <file>` then `git rebase --continue`
-5. `git push`
-
 If you're unsure how to resolve, ping the team chat before force-anything.
+
+**Two people claim the same model**: whoever's PR gets merged first wins. The losing PR can be edited (claim a different model) or closed. No bad blood — just standup-resolve over coffee.
+
+**Tests must pass before requesting review**. Run `uv run pytest tests/ -q` locally — CI doesn't exist yet, so the team is the test enforcement.
 
 ---
 

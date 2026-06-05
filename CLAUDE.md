@@ -131,10 +131,14 @@ For comparing multiple models or computing bootstrap CIs, see `docs/eval_harness
 
 ### Git workflow
 
-- Everyone works on `main` (no feature branches for 3-week sprint).
-- `git pull --rebase` before `git push`.
+- **`main` is protected** — direct pushes blocked except for the repo admin (ikhwanwahid).
+- All other contributors use **feature branch + PR + 1 approval**.
+- Branch naming: `model/<name>-<author>`, `feature/<short-desc>`, `fix/<short-desc>`, `docs/<short-desc>`.
 - Commit messages: `<verb> <what> — <why if non-obvious>`.
-- To claim a model: edit the table in `docs/week2_onboarding.md` §4b, set Status to 🟡, push.
+- To claim a model from `docs/week2_onboarding.md` §4b: branch from main, edit Status to 🟡 + add Owner name, push branch, open PR, get 1 approval, merge. First merged PR wins.
+- Always run `uv run pytest tests/ -q` locally before requesting review.
+
+Full workflow detail in `docs/week2_onboarding.md` §6 "Git workflow".
 
 ---
 
