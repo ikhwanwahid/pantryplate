@@ -65,6 +65,9 @@ def _cache_path_for_model(model_name: str, cache_dir: Path) -> Path:
     return cache_dir / f"recipe_sbert_{safe}.npy"
 
 
+VALID_PROFILE_STRATEGIES = ("mean", "rating_weighted", "recency_weighted")
+
+
 class SentenceBERTRecommender:
     """Cosine-similarity recommender over sentence-transformers recipe text embeddings.
 
@@ -76,6 +79,18 @@ class SentenceBERTRecommender:
     positive_threshold : int
         Rating ≥ this counts as a positive for user-profile construction.
         Defaults to the project-wide POSITIVE_THRESHOLD (= 4).
+    profile_strategy : {"mean", "rating_weighted", "recency_weighted"}
+        How to aggregate a user's positive recipes into a single profile vector.
+        - "mean" : simple mean of L2-normalized item vectors (baseline).
+        - "rating_weighted" : weight by max(rating - 3, 0) so 5★ counts 2x more
+          than 4★. Captures intensity of preference.
+        - "recency_weighted" : exponential decay by days from user's most recent
+          rating (half-life = `recency_half_life_days`). Captures evolving taste.
+        All strategies re-L2 the resulting mean so cosine sim is well-defined.
+    recency_half_life_days : int
+        Half-life of the recency weight (in days). Only used by recency_weighted.
+        Default 180 (≈6 months): a 1-year-old rating counts ~25%; a 3-year-old
+        rating counts ~3%.
     cache_dir : Path
         Where recipe embeddings get cached (and reloaded across fits).
     batch_size : int
@@ -91,13 +106,22 @@ class SentenceBERTRecommender:
         self,
         model_name: str = DEFAULT_MODEL,
         positive_threshold: int = POSITIVE_THRESHOLD,
+        profile_strategy: str = "mean",
+        recency_half_life_days: int = 180,
         cache_dir: Path = SBERT_CACHE_DIR,
         batch_size: int = 128,
         device: str | None = None,
         force_rebuild: bool = False,
     ):
+        if profile_strategy not in VALID_PROFILE_STRATEGIES:
+            raise ValueError(
+                f"profile_strategy must be one of {VALID_PROFILE_STRATEGIES}, "
+                f"got {profile_strategy!r}"
+            )
         self.model_name = model_name
         self.positive_threshold = positive_threshold
+        self.profile_strategy = profile_strategy
+        self.recency_half_life_days = recency_half_life_days
         self.cache_dir = Path(cache_dir)
         self.batch_size = batch_size
         self.device = device
@@ -217,22 +241,55 @@ class SentenceBERTRecommender:
         return emb.astype(np.float32, copy=False)
 
     def _build_user_profiles(self, positives: pd.DataFrame) -> dict[int, np.ndarray]:
-        """Average L2-normalized recipe embeddings per user, then re-L2 the mean."""
+        """Aggregate per-user positive recipe embeddings into a single profile vector.
+
+        Strategy is selected by self.profile_strategy. All strategies produce
+        an L2-normalized 1D vector so cosine sim at recommend time is a dot product.
+        """
         profiles: dict[int, np.ndarray] = {}
-        # Group by user, average their positive items' vectors
+        strategy = self.profile_strategy
+
         for user_id, group in positives.groupby("user_id"):
-            rows = [
-                self._recipe_id_to_row[int(rid)]
-                for rid in group["recipe_id"].to_numpy()
-                if int(rid) in self._recipe_id_to_row
-            ]
-            if not rows:
+            recipe_ids = group["recipe_id"].to_numpy()
+            mask = np.array([int(rid) in self._recipe_id_to_row for rid in recipe_ids])
+            if not mask.any():
                 continue
-            mean_vec = self._recipe_matrix[rows].mean(axis=0)
-            norm = np.linalg.norm(mean_vec)
+
+            rows = np.array(
+                [self._recipe_id_to_row[int(rid)] for rid in recipe_ids[mask]],
+                dtype=np.int64,
+            )
+            vectors = self._recipe_matrix[rows]  # (n_pos, dim)
+
+            if strategy == "mean":
+                weights = None
+            elif strategy == "rating_weighted":
+                ratings = group["rating"].to_numpy()[mask].astype(np.float32)
+                # 4★ → 1, 5★ → 2 (subtract 3, clip at 0). All positives are ≥4 by construction
+                # but clip defensively in case the caller passes the threshold differently.
+                weights = np.clip(ratings - 3.0, 0.0, None)
+            elif strategy == "recency_weighted":
+                dates = pd.to_datetime(group["date"].to_numpy()[mask], errors="coerce")
+                if dates.isna().all():
+                    weights = None  # date column missing/corrupt — fall back to mean
+                else:
+                    ref = dates.max()  # the user's most recent rating
+                    days_old = np.asarray((ref - dates).total_seconds()) / 86400.0
+                    # exp(-ln(2) * d / half_life) → 1.0 at d=0, 0.5 at d=half_life
+                    weights = np.exp(-np.log(2.0) * days_old / self.recency_half_life_days).astype(np.float32)
+            else:
+                raise RuntimeError(f"unknown profile_strategy: {strategy}")
+
+            if weights is not None and weights.sum() > 0:
+                profile_vec = (vectors * weights[:, None]).sum(axis=0) / weights.sum()
+            else:
+                profile_vec = vectors.mean(axis=0)
+
+            norm = np.linalg.norm(profile_vec)
             if norm == 0:
                 continue
-            profiles[int(user_id)] = (mean_vec / norm).astype(np.float32, copy=False)
+            profiles[int(user_id)] = (profile_vec / norm).astype(np.float32, copy=False)
+
         return profiles
 
     def _popularity_fallback(self, user_id: int, k: int, exclude_seen: bool) -> List[int]:

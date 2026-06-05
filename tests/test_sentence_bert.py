@@ -20,6 +20,7 @@ import pytest
 
 from src.models.sentence_bert import (
     DEFAULT_MODEL,
+    VALID_PROFILE_STRATEGIES,
     SentenceBERTRecommender,
     _build_recipe_text,
     _cache_path_for_model,
@@ -206,6 +207,90 @@ class TestFitAndRecommendMocked:
         model = SentenceBERTRecommender(cache_dir=tmp_path)
         with pytest.raises(RuntimeError, match="Call .fit"):
             model.recommend(user_id=1, k=5)
+
+
+# ============================================================
+# Profile strategy variants
+# ============================================================
+
+class TestProfileStrategies:
+    """Verify each profile_strategy produces sane vectors and differs from baseline."""
+
+    def _make_recipes(self, n: int = 20) -> pd.DataFrame:
+        return pd.DataFrame({
+            "id": list(range(1000, 1000 + n)),
+            "name": [f"recipe {i}" for i in range(n)],
+            "ingredients_parsed": [["ing_a", "ing_b"]] * n,
+            "tags_parsed": [["tag1"]] * n,
+        })
+
+    def _make_train_with_dates(self, n_users: int = 3) -> pd.DataFrame:
+        """Each user has 3 positives spanning ~1 year, with mixed 4/5 star ratings."""
+        rows = []
+        base_date = pd.Timestamp("2024-01-01")
+        for u in range(n_users):
+            for offset in range(3):
+                rows.append({
+                    "user_id": u,
+                    "recipe_id": 1000 + (u * 3) + offset,
+                    "rating": 4 + (offset % 2),  # alternates 4, 5, 4
+                    "date": base_date + pd.Timedelta(days=offset * 180),
+                })
+        return pd.DataFrame(rows)
+
+    def test_rejects_invalid_strategy(self, tmp_path):
+        with pytest.raises(ValueError, match="profile_strategy must be one of"):
+            SentenceBERTRecommender(cache_dir=tmp_path, profile_strategy="bogus")
+
+    def test_all_strategies_listed_are_valid(self):
+        assert set(VALID_PROFILE_STRATEGIES) == {"mean", "rating_weighted", "recency_weighted"}
+
+    @patch("src.models.sentence_bert.load_recipes")
+    def test_each_strategy_builds_normalized_profiles(self, mock_load, tmp_path):
+        recipes = self._make_recipes(20)
+        mock_load.return_value = recipes
+        train = self._make_train_with_dates(n_users=3)
+
+        for strategy in VALID_PROFILE_STRATEGIES:
+            with patch("sentence_transformers.SentenceTransformer", _fake_encoder_class(dim=8, seed=7)):
+                model = SentenceBERTRecommender(
+                    cache_dir=tmp_path, force_rebuild=True, profile_strategy=strategy
+                )
+                model.fit(train)
+            assert len(model._user_vectors) == 3, f"{strategy}: expected 3 profiles"
+            for uid, vec in model._user_vectors.items():
+                assert vec.shape == (8,), f"{strategy} user {uid}: shape mismatch"
+                np.testing.assert_allclose(
+                    np.linalg.norm(vec), 1.0, rtol=1e-5,
+                    err_msg=f"{strategy} user {uid}: not L2-normalized"
+                )
+
+    @patch("src.models.sentence_bert.load_recipes")
+    def test_strategies_produce_different_profiles(self, mock_load, tmp_path):
+        """Verify the strategies actually compute differently (not silently identical)."""
+        recipes = self._make_recipes(20)
+        mock_load.return_value = recipes
+        train = self._make_train_with_dates(n_users=3)
+
+        profiles_by_strategy = {}
+        for strategy in VALID_PROFILE_STRATEGIES:
+            # Use SAME seed so any difference comes from the strategy logic, not encoder randomness
+            with patch("sentence_transformers.SentenceTransformer", _fake_encoder_class(dim=8, seed=7)):
+                model = SentenceBERTRecommender(
+                    cache_dir=tmp_path, force_rebuild=True, profile_strategy=strategy
+                )
+                model.fit(train)
+            profiles_by_strategy[strategy] = model._user_vectors[0]
+
+        # Mean and rating_weighted should differ (rating_weighted upweights 5★ items)
+        assert not np.allclose(
+            profiles_by_strategy["mean"], profiles_by_strategy["rating_weighted"], atol=1e-4
+        ), "rating_weighted should differ from mean when ratings vary"
+
+        # Mean and recency_weighted should differ (recency_weighted upweights recent items)
+        assert not np.allclose(
+            profiles_by_strategy["mean"], profiles_by_strategy["recency_weighted"], atol=1e-4
+        ), "recency_weighted should differ from mean when dates span time"
 
 
 # ============================================================
