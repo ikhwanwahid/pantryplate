@@ -1,0 +1,42 @@
+{
+  "id": "vegan_busy",
+  "label": "Busy vegan",
+  "description": "Vegan diet, preferred quick weeknight meals, balanced macros. Tests the diet hard-filter and the auto-exclusion of dairy/eggs from staples via get_staples_for_persona().",
+  "macro_targets": {
+    "calories": 550,
+    "protein_pdv": 30,
+    "carbs_pdv": 50,
+    "fat_pdv": 25,
+    "sodium_pdv": 30
+  },
+  "restrictions": ["vegan"],
+  "exclude_from_staples": [],
+  "pantry": [
+    "tofu",
+    "tempeh",
+    "lentils",
+    "chickpeas",
+    "black beans",
+    "edamame",
+    "spinach",
+    "kale",
+    "broccoli",
+    "mushrooms",
+    "bell pepper",
+    "carrots",
+    "brown rice",
+    "quinoa",
+    "pasta",
+    "oats",
+    "oat milk",
+    "almond milk",
+    "nutritional yeast",
+    "tahini",
+    "hummus",
+    "soy sauce",
+    "tomato paste",
+    "turmeric",
+    "cumin"
+  ],
+  "taste_seeds": []
+}

@@ -1,0 +1,42 @@
+{
+  "id": "family_friendly",
+  "label": "Family with kids",
+  "description": "Feeding multiple people (incl. kids), so higher calorie target, balanced macros, no diet restrictions. Pantry leans toward versatile, kid-friendly ingredients. Used as the 'neutral / loose constraints' reference persona.",
+  "macro_targets": {
+    "calories": 700,
+    "protein_pdv": 30,
+    "carbs_pdv": 45,
+    "fat_pdv": 30,
+    "sodium_pdv": 50
+  },
+  "restrictions": [],
+  "exclude_from_staples": [],
+  "pantry": [
+    "chicken thigh",
+    "ground beef",
+    "bacon",
+    "ham",
+    "hot dogs",
+    "pasta",
+    "rice",
+    "potato",
+    "bread",
+    "cheddar",
+    "mozzarella",
+    "parmesan cheese",
+    "cream cheese",
+    "broccoli",
+    "carrot",
+    "tomato",
+    "lettuce",
+    "corn",
+    "peas",
+    "banana",
+    "peanut butter",
+    "ketchup",
+    "mayonnaise",
+    "mustard",
+    "breadcrumbs"
+  ],
+  "taste_seeds": []
+}

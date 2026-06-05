@@ -1,0 +1,119 @@
+PantryPlate · Week 1 Data Sanity Checks
+============================================================
+Loading RAW_recipes.csv ...
+  → 231,637 recipes loaded
+Loading RAW_interactions.csv ...
+  → 1,132,367 interactions loaded
+
+============================================================
+CHECK 1 — Nutrition coverage rate
+============================================================
+Recipes with valid 7-element nutrition vector: 231,637 / 231,637 (100.0%)
+
+Calorie distribution (across valid recipes):
+  median: 313 kcal
+  90th percentile: 844 kcal
+  max: 434360 kcal
+  recipes with > 5000 kcal (suspect): 1,049
+
+Verdict: ✓ STRONG (target: ≥70%)
+
+============================================================
+CHECK 2 — Interaction density
+============================================================
+Total interactions: 1,132,367
+Unique users: 226,570
+
+Ratings per user distribution:
+  mean: 5.0
+  median: 1
+  90th percentile: 5
+  users with ≥1 rating: 226,570
+  users with ≥5 ratings: 23,086
+  users with ≥10 ratings: 12,486
+  users with ≥20 ratings: 6,687
+
+Rating value distribution:
+  0 stars: 60,847 (5.4%)
+  1 stars: 12,818 (1.1%)
+  2 stars: 14,123 (1.2%)
+  3 stars: 40,855 (3.6%)
+  4 stars: 187,360 (16.5%)
+  5 stars: 816,364 (72.1%)
+  4-star or higher: 1,003,724 (88.6%)
+
+Verdict: ⚠ ACCEPTABLE (target: ≥10K users with ≥5 ratings)
+
+============================================================
+CHECK 3 — Tag taxonomy validity
+============================================================
+Total tag occurrences: 4,141,688
+Unique tags: 552
+
+Dietary tag coverage (per recipe):
+  ✓ vegetarian: 35,651 recipes (15.4%)
+  ✓ vegan: 10,012 recipes (4.3%)
+  ✓ gluten-free: 5,743 recipes (2.5%)
+  ✓ dairy-free: 195 recipes (0.1%)
+  ✓ low-carb: 42,189 recipes (18.2%)
+  ✓ low-fat: 22,170 recipes (9.6%)
+  ✓ low-sodium: 43,349 recipes (18.7%)
+  ⚠ low-sugar: 0 recipes (0.0%)
+  ✓ diabetic: 6,458 recipes (2.8%)
+  ✓ kosher: 4,446 recipes (1.9%)
+  ⚠ halal: 0 recipes (0.0%)
+  ✓ nut-free: 218 recipes (0.1%)
+  ✓ egg-free: 5,064 recipes (2.2%)
+  ⚠ lactose-free: 0 recipes (0.0%)
+  ⚠ paleo: 0 recipes (0.0%)
+  ⚠ keto: 0 recipes (0.0%)
+  ⚠ whole30: 0 recipes (0.0%)
+
+Dietary tags with > 100 recipes: 11 / 17
+Verdict: ✓ STRONG (target: ≥4 well-covered dietary tags)
+
+============================================================
+CHECK 4 — Time range
+============================================================
+Interactions with valid dates: 1,132,367 / 1,132,367
+Date range: 2000-01-25 00:00:00 to 2018-12-20 00:00:00
+
+Interactions per year (last 5 years):
+  2014: 30,503
+  2015: 23,374
+  2016: 18,147
+  2017: 27,062
+  2018: 20,647
+
+Verdict: ✓ (use for time-based train/test split)
+
+============================================================
+CHECK 5 — Ingredient parsing quality
+============================================================
+Recipes with parseable ingredient lists: 231,637 / 231,637 (100.0%)
+
+Ingredient count per recipe:
+  median: 9
+  90th percentile: 14
+  max: 43
+
+Sample of 5 random recipes:
+  · crab filled crescent snacks: ['crabmeat', 'cream cheese', 'green onions', 'garlic salt', 'refrigerated crescent dinner rolls'] ...
+  · curried bean salad: ['garbanzo beans', 'black beans', 'onion', 'ginger paste', 'mild curry powder'] ...
+  · delicious steak with onion marinade: ['olive oil', 'red onion', 'light brown sugar', 'balsamic vinegar', 'steaks']
+  · pork tenderloin with hoisin: ['pork tenderloin', 'soy sauce', 'hoisin sauce', 'rice wine', 'hot chili paste'] ...
+  · mixed baby greens with oranges  grapefruit and avo: ['mixed baby greens', 'oranges', 'grapefruit', 'avocado', 'olive oil'] ...
+
+Ingredient canonical mapping (ingr_map.pkl): ✓ (8,023 canonical ingredients)
+
+Verdict: ✓
+
+============================================================
+SUMMARY
+============================================================
+  Nutrition coverage: 100.0%
+  Active users (≥5 ratings): 23,086
+  Dietary tags covered: 11 / 17
+
+→ Dataset is suitable for the project as scoped.
+  Proceed to baseline model training in Week 2.

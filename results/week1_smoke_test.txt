@@ -1,0 +1,70 @@
+======================================================================
+PantryPlate · Dual-Track Smoke Test
+======================================================================
+
+[1/5] Loading authors' pre-split train file ...
+      train (pre-split):     681,944 interactions, 24,961 active users
+      loaded in 0.3s
+
+[2/5] TRACK A — building warm-item evaluation (our own time-based LOO)
+      train (after holdout): 657,562 interactions
+      test (warm held-outs): 24,382 users with held-out positive
+      done in 0.2s
+
+[3/5] TRACK B — loading authors' cold-item test set ...
+      test (cold held-outs): 10,393 users with held-out positive
+      cold test items in train: 0 / 10,393 (0.0%)
+      → essentially all cold (model has never seen these items)
+
+[4/5] Training PopularityRecommender on warm train ...
+      done in 0.4s (158,340 recipes ranked)
+
+[5/5] Demo recommendations on TRACK A (warm) for 3 sample users:
+      user 1244786: top-10 = [27208, 89204, 32204, 39087, 69173] ... held-out = [87085]  hit@10 = NO
+      user 108902: top-10 = [27208, 32204, 39087, 69173, 22782] ... held-out = [73818]  hit@10 = NO
+      user 32253: top-10 = [27208, 89204, 32204, 39087, 69173] ... held-out = [60382]  hit@10 = NO
+
+======================================================================
+DUAL-TRACK EVALUATION SUMMARY
+======================================================================
+
+      [TRACK A — warm] metrics over 2,000 users:
+      metric           mean
+      ------------ --------
+      recall@5       0.0185
+      recall@10      0.0295
+      recall@20      0.0450
+      ndcg@5         0.0102
+      ndcg@10        0.0139
+      ndcg@20        0.0177
+      mrr            0.0102
+
+      [TRACK B — cold] metrics over 2,000 users:
+      metric           mean
+      ------------ --------
+      recall@5       0.0000
+      recall@10      0.0000
+      recall@20      0.0000
+      ndcg@5         0.0000
+      ndcg@10        0.0000
+      ndcg@20        0.0000
+      mrr            0.0000
+
+======================================================================
+INTERPRETATION
+======================================================================
+
+  Track A (warm) Recall@10 = 0.0295  ← popularity FLOOR for warm-item CF
+  Track B (cold) Recall@10 = 0.0000  ← popularity CANNOT do cold-item by construction
+
+  Week 2 expectations:
+    Track A: MF, EASE, BPR, hybrid should comfortably beat popularity's warm floor.
+    Track B: only content-aware models (TF-IDF, Sentence-BERT, hybrid, two-tower)
+             will produce non-zero numbers — they read recipe content directly.
+
+  This justifies the dual-track evaluation: different models win different regimes,
+  and the hybrid is the only one that should perform well on both.
+
+======================================================================
+SMOKE TEST: ✓ PASSED
+======================================================================

@@ -1,0 +1,42 @@
+{
+  "id": "fitness_focused",
+  "label": "Fitness-focused user",
+  "description": "Tracks macros carefully, prioritizes high-protein meals, leans toward whole foods and low-carb tendencies. No formal dietary restriction — let the macro targets drive ranking.",
+  "macro_targets": {
+    "calories": 500,
+    "protein_pdv": 50,
+    "carbs_pdv": 30,
+    "fat_pdv": 25,
+    "sodium_pdv": 30
+  },
+  "restrictions": [],
+  "exclude_from_staples": [],
+  "pantry": [
+    "chicken breast",
+    "ground turkey",
+    "salmon",
+    "tuna",
+    "tofu",
+    "edamame",
+    "lentils",
+    "greek yogurt",
+    "cottage cheese",
+    "broccoli",
+    "spinach",
+    "kale",
+    "asparagus",
+    "bell pepper",
+    "sweet potato",
+    "brown rice",
+    "quinoa",
+    "oats",
+    "almonds",
+    "walnuts",
+    "natural peanut butter",
+    "berries",
+    "banana",
+    "ginger",
+    "avocado"
+  ],
+  "taste_seeds": []
+}
