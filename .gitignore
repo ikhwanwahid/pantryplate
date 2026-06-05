@@ -3,6 +3,7 @@ data/raw/
 data/processed/*.db
 data/processed/*.parquet
 data/processed/*.pkl
+data/processed/*.npy
 
 # Python
 __pycache__/
