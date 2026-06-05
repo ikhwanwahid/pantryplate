@@ -294,6 +294,106 @@ class TestProfileStrategies:
 
 
 # ============================================================
+# Popularity blending
+# ============================================================
+
+class TestPopularityBlend:
+    """Verify content_weight actually mixes popularity into the score."""
+
+    def _make_recipes(self, n: int = 20) -> pd.DataFrame:
+        return pd.DataFrame({
+            "id": list(range(1000, 1000 + n)),
+            "name": [f"recipe {i}" for i in range(n)],
+            "ingredients_parsed": [["ing_a", "ing_b"]] * n,
+            "tags_parsed": [["tag1"]] * n,
+        })
+
+    def _make_train_skewed(self) -> pd.DataFrame:
+        """Recipe 1019 (the LAST recipe) is hugely popular; recipe 1000 has 1 rater."""
+        rows = []
+        # 50 users all rate recipe 1019
+        for u in range(50):
+            rows.append({"user_id": u, "recipe_id": 1019, "rating": 5})
+        # 1 user rates recipe 1000
+        rows.append({"user_id": 100, "recipe_id": 1000, "rating": 5})
+        return pd.DataFrame(rows)
+
+    def test_rejects_invalid_alpha(self, tmp_path):
+        for bad in (-0.1, 1.1, 2.0):
+            with pytest.raises(ValueError, match="content_weight"):
+                SentenceBERTRecommender(cache_dir=tmp_path, content_weight=bad)
+
+    @patch("src.models.sentence_bert.load_recipes")
+    def test_alpha_1_matches_pure_content_baseline(self, mock_load, tmp_path):
+        """alpha=1.0 should be exactly the pre-blending behavior."""
+        recipes = self._make_recipes(20)
+        mock_load.return_value = recipes
+        train = self._make_train_skewed()
+
+        with patch("sentence_transformers.SentenceTransformer", _fake_encoder_class(dim=8, seed=11)):
+            baseline = SentenceBERTRecommender(cache_dir=tmp_path, force_rebuild=True, content_weight=1.0)
+            baseline.fit(train)
+        # Pick a user with a profile
+        recs_alpha_1 = baseline.recommend(0, k=5, exclude_seen=False)
+        # And manually compute what pure-cosine should give
+        scores = baseline._recipe_matrix @ baseline._user_vectors[0]
+        expected = [int(baseline.recipe_ids[i]) for i in np.argsort(-scores)[:5]]
+        assert recs_alpha_1 == expected
+
+    @patch("src.models.sentence_bert.load_recipes")
+    def test_alpha_0_returns_popularity_ranking_top1(self, mock_load, tmp_path):
+        """alpha=0.0 means score=(1-0)*pop, so top-1 should be the most-popular recipe."""
+        recipes = self._make_recipes(20)
+        mock_load.return_value = recipes
+        train = self._make_train_skewed()
+
+        with patch("sentence_transformers.SentenceTransformer", _fake_encoder_class(dim=8, seed=11)):
+            model = SentenceBERTRecommender(cache_dir=tmp_path, force_rebuild=True, content_weight=0.0)
+            model.fit(train)
+        # User 100 has a profile (they rated 1000). With alpha=0, popularity dominates.
+        # Most popular recipe is 1019.
+        recs = model.recommend(user_id=100, k=3, exclude_seen=False)
+        assert recs[0] == 1019, f"alpha=0 should rank most-popular first; got {recs}"
+
+    @patch("src.models.sentence_bert.load_recipes")
+    def test_alpha_0_and_alpha_1_produce_different_rankings(self, mock_load, tmp_path):
+        """Sanity: alpha=0 (pure pop) and alpha=1 (pure content) differ when both have signal."""
+        recipes = self._make_recipes(20)
+        mock_load.return_value = recipes
+        train = self._make_train_skewed()
+
+        with patch("sentence_transformers.SentenceTransformer", _fake_encoder_class(dim=8, seed=11)):
+            m_pop = SentenceBERTRecommender(cache_dir=tmp_path, force_rebuild=True, content_weight=0.0)
+            m_pop.fit(train)
+        with patch("sentence_transformers.SentenceTransformer", _fake_encoder_class(dim=8, seed=11)):
+            m_content = SentenceBERTRecommender(cache_dir=tmp_path, force_rebuild=True, content_weight=1.0)
+            m_content.fit(train)
+
+        recs_pop = m_pop.recommend(100, k=10, exclude_seen=False)
+        recs_content = m_content.recommend(100, k=10, exclude_seen=False)
+        assert recs_pop != recs_content, "alpha=0 and alpha=1 should produce different rankings"
+
+    @patch("src.models.sentence_bert.load_recipes")
+    def test_popularity_score_is_zero_for_cold_recipes(self, mock_load, tmp_path):
+        """Recipes with no train ratings should have popularity_score = 0."""
+        recipes = self._make_recipes(20)
+        mock_load.return_value = recipes
+        train = self._make_train_skewed()  # only recipes 1019 and 1000 are rated
+
+        with patch("sentence_transformers.SentenceTransformer", _fake_encoder_class(dim=8, seed=11)):
+            model = SentenceBERTRecommender(cache_dir=tmp_path, force_rebuild=True, content_weight=0.5)
+            model.fit(train)
+
+        # Recipes 1001..1018 have no train ratings → pop score = 0
+        for rid in range(1001, 1019):
+            row = model._recipe_id_to_row[rid]
+            assert model._popularity_score[row] == 0.0, f"recipe {rid} should have pop_score=0"
+        # Recipes 1019 (most popular) should have score > 0
+        row_1019 = model._recipe_id_to_row[1019]
+        assert model._popularity_score[row_1019] > 0
+
+
+# ============================================================
 # Integration tests (real catalogue + real encoder)
 # Skipped if data files are missing OR if running fast tests.
 # ============================================================

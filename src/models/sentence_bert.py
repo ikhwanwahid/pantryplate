@@ -91,6 +91,22 @@ class SentenceBERTRecommender:
         Half-life of the recency weight (in days). Only used by recency_weighted.
         Default 180 (≈6 months): a 1-year-old rating counts ~25%; a 3-year-old
         rating counts ~3%.
+    content_weight : float in [0, 1]
+        Stage-1-internal blend between content and popularity signals:
+            score = content_weight * cosine + (1 - content_weight) * popularity_score
+        Both terms are pre-normalized into [0, 1] so the weight is interpretable.
+        - content_weight=1.0 (default): pure SBERT cosine. Optimal for cold-track.
+        - content_weight=0.0: pure popularity. Equivalent to PopularityRecommender
+          on warm-track (content acts as a 0 tiebreaker).
+        - content_weight~0.5: balanced blend. Useful when popularity has signal
+          (warm) but content adds taste personalization.
+        Cold recipes have popularity_score=0 by construction, so content_weight<1
+        always hurts cold-track Recall@K — this is correct, not a bug.
+
+        NOTE: this α is INTERNAL to Stage 1. It is distinct from the deck's
+        Stage 2 (αₜ, αₚ, αₙ) constraint-weight simplex. This knob produces
+        a better s_taste for Stage 2 to consume; it does not replace the
+        Stage 2 reranker.
     cache_dir : Path
         Where recipe embeddings get cached (and reloaded across fits).
     batch_size : int
@@ -108,6 +124,7 @@ class SentenceBERTRecommender:
         positive_threshold: int = POSITIVE_THRESHOLD,
         profile_strategy: str = "mean",
         recency_half_life_days: int = 180,
+        content_weight: float = 1.0,
         cache_dir: Path = SBERT_CACHE_DIR,
         batch_size: int = 128,
         device: str | None = None,
@@ -118,10 +135,17 @@ class SentenceBERTRecommender:
                 f"profile_strategy must be one of {VALID_PROFILE_STRATEGIES}, "
                 f"got {profile_strategy!r}"
             )
+        if not 0.0 <= content_weight <= 1.0:
+            raise ValueError(
+                f"content_weight must be in [0, 1], got {content_weight}"
+            )
+        # Note: parameter renamed from popularity_blend_alpha for clarity —
+        # content_weight=1.0 means "100% content, 0% popularity".
         self.model_name = model_name
         self.positive_threshold = positive_threshold
         self.profile_strategy = profile_strategy
         self.recency_half_life_days = recency_half_life_days
+        self.content_weight = content_weight
         self.cache_dir = Path(cache_dir)
         self.batch_size = batch_size
         self.device = device
@@ -133,6 +157,7 @@ class SentenceBERTRecommender:
         self._recipe_matrix: np.ndarray = np.empty((0, 0), dtype=np.float32)  # (n_recipes, dim), L2-normalized
         self._user_vectors: dict[int, np.ndarray] = {}                         # user_id -> (dim,) L2-normalized
         self._popularity_rank: np.ndarray = np.empty(0, dtype=np.int64)        # cold-user fallback
+        self._popularity_score: np.ndarray = np.empty(0, dtype=np.float32)     # per-recipe pop in [0, 1]
         self._user_seen: dict[int, set[int]] = {}
 
     # ---------------------------------------------------------------------
@@ -167,11 +192,23 @@ class SentenceBERTRecommender:
         positives = train_df[train_df["rating"] >= self.positive_threshold]
         self._user_vectors = self._build_user_profiles(positives)
 
-        # 3. Popularity rank as cold-user fallback (same logic as PopularityRecommender)
+        # 3. Popularity rank (for cold-user fallback) + per-recipe popularity score
+        #    (for the blend with cosine similarity).
         popularity = train_df.groupby("recipe_id")["user_id"].nunique()
-        # Some popular recipe_ids may not be in the recipe catalogue (rare, but possible)
         popularity = popularity[popularity.index.isin(self._recipe_id_to_row)]
         self._popularity_rank = popularity.sort_values(ascending=False).index.to_numpy()
+
+        # Per-recipe popularity score in [0, 1]: rank-based normalization makes it
+        # robust to the heavy popularity tail. Recipes with zero train ratings
+        # (i.e. cold) stay at 0, which is what we want for blending.
+        pop_score = np.zeros(len(self.recipe_ids), dtype=np.float32)
+        n_with_signal = len(self._popularity_rank)
+        if n_with_signal > 0:
+            # rank 0 (most popular) → 1.0, rank n-1 (least popular) → ~0
+            for rank, rid in enumerate(self._popularity_rank):
+                row = self._recipe_id_to_row[int(rid)]
+                pop_score[row] = 1.0 - (rank / n_with_signal)
+        self._popularity_score = pop_score
 
         # 4. Seen-set per user, for exclude_seen handling
         self._user_seen = (
@@ -197,7 +234,14 @@ class SentenceBERTRecommender:
         if user_vec is None:
             return self._popularity_fallback(user_id, k, exclude_seen)
 
-        scores = self._recipe_matrix @ user_vec  # (n_recipes,) cosine similarity (both L2-normed)
+        # Cosine similarity (both sides L2-normalized, so dot product == cosine).
+        # Cosine values are in [-1, 1] but for normalized text embeddings they're
+        # almost always in [0, 1], so blending with [0, 1] popularity is fine.
+        scores = self._recipe_matrix @ user_vec  # (n_recipes,)
+
+        w = self.content_weight
+        if w < 1.0:
+            scores = w * scores + (1.0 - w) * self._popularity_score
 
         if exclude_seen:
             seen = self._user_seen.get(int(user_id), set())
