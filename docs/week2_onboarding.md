@@ -148,27 +148,30 @@ The `PopularityRecommender` in `src/models/popularity.py` is the reference imple
 
 ---
 
-## 4. The 11 locked decisions you must respect
+## 4. The 12 locked decisions you must respect
 
 If you ever wonder *"can I change X?"*, the answer is *"check `docs/data_decisions.md` — if it's in the summary table, no, don't change it."*
 
-The 11 in one-liner form:
+The 12 in one-liner form:
 
-1. **Training cohort = authors' pre-split train** (25K active users / 681K interactions after 0-star drop). Use `load_train_interactions()`.
+1. **Training cohort = authors' pre-split train** (24,961 users / 681K interactions after 0-star drop). Note: NOT pre-filtered to ≥5 ratings — wide activity spread (~41% low, ~38% medium, ~21% high). Use `load_train_interactions()`.
 2. **Dual-track evaluation**: warm-item LOO + cold-item from authors' test. The harness handles both via `track="warm"` / `track="cold"`.
 3. **Drop 0-star ratings** — they're "review without rating" entries. `load_train_interactions()` drops them by default.
 4. **Positive rating threshold = 4 stars** — for LOO holdout logic.
-5. **Stage 1 model menu** is set: Popularity, MF, EASE, BPR, Content TF-IDF, Sentence-BERT, Hybrid linear, Two-tower neural (+ SASRec as stretch). Don't add models unless coordinated.
+5. **Stage 1 model menu** is set: Popularity, MF, EASE, BPR, Tag SVD content, Sentence-BERT, Hybrid linear, Two-tower neural (+ SASRec as stretch). Don't add models unless coordinated.
 6. **CF-only models can be restricted to recipes with ≥10 ratings** for memory reasons (your call per model — see decision 6 in the register for the trade-off).
 7. **Pantry reranker score** is non-staple overlap (continuous); **Useful Recall pantry condition** is `missing_count ≤ 3`. Both live in `src/utils/staples.py`. You don't touch these in Stage 1.
 8. **Diet enforcement** is hard-filter (Week 4 work, not yours).
 9. **Nutrition clipping** at (5000 kcal, 1000% PDV) — already done in the loader.
 10. **Persona pantry size** = 25-35 user-specific items. Staples are project-wide. Persona JSONs live in `data/personas/`.
 11. **Eval harness** is the only sanctioned evaluation path. ✓ Built; see `src/eval/harness.py`.
+12. **Recipe features are centralized** in `src/data/features.py` (107-dim: 100 tag-SVD + 7 normalized nutrition). Cached at `data/processed/recipe_features.parquet`. Use it for content/hybrid/two-tower — don't roll your own.
 
 ---
 
 ## 4b. Pick a model to build — coordination table
+
+> **Content / hybrid / two-tower model builders**: there's a ready-made 107-dim recipe feature matrix in `src/data/features.py` (100-dim tag SVD + 7-dim normalized nutrition). Cached at `data/processed/recipe_features.parquet`. Use it instead of rolling your own item features — saves 4-8 hours per model. See [§4.5 Feature engineering](#) below.
 
 **How to claim a model**: open a PR against `main` that edits the **Owner** column in this table and sets **Status** to 🟡. The PR needs 1 approval from a teammate before it merges. First *merged* PR wins. The table (on `main`) is the single source of truth for who's building what.
 
@@ -193,7 +196,7 @@ gh pr create --title "Claim <model>" --body "Section 4b update."
 | 🟡 | 1 | Sentence-BERT content | Content-aware | 4-6 hr | Low-Med | `sentence-transformers` library; cache embeddings to `data/processed/` | Cold-track contender. Semantic embeddings; works on both tracks. PoC for end-to-end pipeline validation. | Ikhwan |
 | ⬜ | 2 | **BPR** (Cornac) | CF implicit | 4-6 hr | Low | `cornac.models.BPR`; defaults are good | Course-syllabus model. Expected to dominate warm-track CF. Pair with EASE for paradigm comparison. | TBD |
 | ⬜ | 3 | **EASE** | CF implicit | 3-4 hr | Low | `cornac.models.EASE` if available, else ~15 lines of numpy. One hyperparam (λ). | Closed-form, no SGD. Often beats fancier models on classic recsys benchmarks. Very fast to train. | TBD |
-| ⬜ | 4 | Content TF-IDF | Content-aware | 3-4 hr | Low | sklearn `TfidfVectorizer` on (ingredients + tags + name); cosine sim | Cold-track reference (sparse representation). Completes the content paradigm comparison vs SBERT. | TBD |
+| ⬜ | 4 | **Tag SVD content** | Content-aware | 2-3 hr | Low | Use `build_recipe_feature_matrix()` from `src/data/features.py` (already cached) → cosine sim | Cold-track tag-based representation. Discriminative+content tag filtering already done; 100-dim dense embedding ready to use. Complements SBERT (text) and offers a different ablation lens. | TBD |
 | ⬜ | 5 | **Hybrid linear** | Combination | 2-3 hr | Low | `α · cf_score + (1-α) · content_score`, normalized | **Expected overall winner.** Combines best CF (priority 2 or 3) with best content (priority 1 or 4). Depends on at least one CF + one content model being done first. | TBD |
 | ⬜ | 6 | MF / ALS (Cornac) | CF rating-prediction | 3-4 hr | Low | `cornac.models.MF` or `cornac.models.WMF` | Reference baseline — included for paradigm comparison. Expected to lose on Recall@K (rating distribution is heavy 4-5★). | TBD |
 | ⬜ | 7 | Two-tower neural | Deep DL | 8-12 hr | High | PyTorch from scratch; user tower + item tower with content features; co-trained with BPR-style loss | Course week W4-W5 coverage. Only if a PyTorch-comfortable teammate has a clear ~12-hour window. **Drop if time tight.** | TBD |
@@ -236,6 +239,65 @@ These also need owners — coordinate at standup:
 | Slide deck updates with real Week 2-3 numbers | 2-3 hr | TBD |
 | Physical prop (cook a recommended recipe) | 1-2 hr + cook time | TBD |
 | Week 2 progress note (end of week) | 1 hr | TBD |
+
+---
+
+## 4.5. Feature engineering — use the pre-built matrix
+
+If you're building a **content-aware** model (Tag SVD, Sentence-BERT, hybrid, two-tower), the recipe features are already done. Don't waste time re-engineering them.
+
+### What's in the box
+
+```python
+from src.data.features import build_recipe_feature_matrix
+features = build_recipe_feature_matrix()
+# DataFrame indexed by recipe_id, shape (231637, 107)
+# Columns: tag_svd_0..tag_svd_99 + nutrition_calories, nutrition_total_fat_pdv, ...
+```
+
+- **First call**: ~52 seconds (builds the matrix and writes the parquet cache + 3 fitted-model pickles)
+- **Subsequent calls**: ~3 seconds (loads parquet)
+- **Coverage**: 100% of the 231,637 recipes in the catalogue have features (no nulls). Critical for cold-item Track B.
+
+### How it's built (one-liner each)
+
+1. Tag SVD: filter raw recipe tags to ~140 useful tags (frequency ≥100, content-pct ≥1%), MultiLabelBinarize → L2 normalize → TruncatedSVD(100). Captures co-occurrence structure across ~550 tags compressed to 100 dense dims.
+2. Nutrition: parse the 7-element nutrition list, clip at 99th percentile per column, then RobustScaler. Heavy-tailed-outlier-safe.
+3. Concatenate → 107-dim recipe representation.
+
+Full rationale, alternatives considered, and credits in `docs/data_decisions.md` §12. Pipeline implementation in `src/data/features.py`. Tests in `tests/test_features.py` (14 passing).
+
+### How to use it in your model
+
+```python
+class MyContentModel:
+    def fit(self, train_df):
+        from src.data.features import build_recipe_feature_matrix
+        self.item_features = build_recipe_feature_matrix()  # (231K, 107)
+        # ... build user profiles by averaging item features for their seen recipes
+        return self
+
+    def recommend(self, user_id, k=10, exclude_seen=True):
+        # cosine similarity between user profile and self.item_features, top-k
+        ...
+```
+
+### Also: user activity tiers
+
+Same module exposes `classify_user_activity()` which buckets users into low (<5 ratings) / medium (5-19) / high (≥20). Useful if your model has different ranking strategies for cold-start vs warm users, or for stratified reporting in your final write-up.
+
+```python
+from src.data.features import classify_user_activity
+from src.data.loader import load_train_interactions
+tiers = classify_user_activity(load_train_interactions())
+# DataFrame: user_id | rating_count | mean_rating | std_rating | activity_tier
+```
+
+### Want different features?
+
+- More SVD dimensions: pass `n_components=200` to `build_recipe_feature_matrix()`. Re-fits ~80s.
+- Add Sentence-BERT embeddings: those should live in their own file (`recipe_sbert.parquet`) — don't bolt them onto this matrix. Hybrid models concatenate at use time.
+- Different staple filtering, different nutrition cap, etc.: discuss in a PR before changing — this matrix is shared across multiple models.
 
 ---
 

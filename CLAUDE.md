@@ -23,7 +23,7 @@ If you're going to make any non-trivial change, read these first:
 |---|---|---|
 | 1 | `README.md` | Project structure, setup, key concepts |
 | 2 | `docs/week2_onboarding.md` | ⭐ Comprehensive onboarding (~30 min read). Data file routing, model contract, locked decisions, conventions, troubleshooting, glossary. |
-| 3 | `docs/data_decisions.md` | The 11 locked decisions with empirical evidence. If your instinct conflicts with one of these, the decision wins. |
+| 3 | `docs/data_decisions.md` | The 12 locked decisions with empirical evidence. If your instinct conflicts with one of these, the decision wins. |
 | 4 | `docs/eval_harness_usage.md` | How to evaluate any Stage 1 model. The harness is the single sanctioned eval path. |
 | 5 | `PantryPlate_Proposal.pdf` | The submitted proposal. Captures the project's pitch and architecture. |
 
@@ -33,17 +33,18 @@ If you're going to make any non-trivial change, read these first:
 
 These have been decided with evidence and documented in `docs/data_decisions.md`. They are **load-bearing** — changing them invalidates work that depends on them. If you have a strong reason to revisit, surface it to the user explicitly; don't silently override.
 
-1. **Training cohort** = authors' pre-split `interactions_train.csv` (24,961 active users). Use `load_train_interactions()`.
+1. **Training cohort** = authors' pre-split `interactions_train.csv` (24,961 users, 681K interactions after 0-star drop). Note: the file is NOT pre-filtered to ≥5 ratings — it has a wide activity spread (~41% low, ~38% medium, ~21% high). Use `load_train_interactions()`.
 2. **Dual-track evaluation**: warm-item LOO (Track A) + cold-item from authors' test (Track B). Use the harness.
 3. **0-star ratings are dropped** during loading (they're "review without rating" entries).
 4. **Positive rating threshold = 4 stars** for LOO holdout logic.
-5. **Stage 1 model menu is set**: Popularity, MF, EASE, BPR, TF-IDF, Sentence-BERT, hybrid, two-tower (+ SASRec stretch). Don't propose adding/swapping models unless coordinated.
+5. **Stage 1 model menu is set**: Popularity, MF, EASE, BPR, Tag SVD content, Sentence-BERT, hybrid, two-tower (+ SASRec stretch). Don't propose adding/swapping models unless coordinated.
 6. **Pantry score uses non-staple overlap**; Useful Recall uses `missing_count ≤ 3`. Both live in `src/utils/staples.py`.
 7. **Diet is a hard filter** in Stage 2 (others are continuous ranking).
 8. **Nutrition clipping** at (5000 kcal, 1000% PDV) — already in the loader.
 9. **Personas**: 25-35 user-specific items per pantry; staples are project-wide via `src/utils/staples.py`. 3 personas already exist in `data/personas/`.
 10. **Eval harness is the only sanctioned evaluation path**. Don't reimplement Recall@K or run your own loops over users.
 11. **Stage 1 model interface**: `.fit(train_df) -> self` + `.recommend(user_id, k, exclude_seen=True) -> list[int]`. Reference impl: `src/models/popularity.py`.
+12. **Recipe features are centralized** in `src/data/features.py` (107-dim: 100 tag-SVD + 7 normalized nutrition). Cached at `data/processed/recipe_features.parquet`. Content/hybrid/two-tower models use this — don't roll your own item features.
 
 ---
 
@@ -121,7 +122,7 @@ For comparing multiple models or computing bootstrap CIs, see `docs/eval_harness
 ### Cold-track expectations
 
 - Pure-CF models (Popularity, MF, EASE, BPR) score **exactly 0** on Track B by construction (cold items have no rater history). This is **correct, not a bug**.
-- Content-aware models (TF-IDF, Sentence-BERT, hybrid, two-tower) should produce **non-zero** numbers on cold.
+- Content-aware models (Tag SVD, Sentence-BERT, hybrid, two-tower) should produce **non-zero** numbers on cold.
 
 ### Staples and personas
 
@@ -152,7 +153,7 @@ If you're picking up work, these are the open workstreams in priority order:
 | 2 | Stage 2 reranker scaffold | Pending — assigned to Ikhwan | 4 score functions + combiner; validates end-to-end with Sentence-BERT |
 | 3 | BPR (Cornac) | Open | Warm-track CF |
 | 4 | EASE | Open | Warm-track CF, closed-form |
-| 5 | TF-IDF content | Open | Cold-track content reference |
+| 5 | Tag SVD content | Open | Cold-track content reference (features pre-built in `src/data/features.py`) |
 | 6 | Hybrid linear | Open (depends on #1 + #3 or #4) | Expected overall winner |
 | 7 | α-sweep experiments | Pending (after Stage 2) | Generates the headline plot |
 | 8 | Demo widget (Streamlit) | Pending | Week 5-6 work |

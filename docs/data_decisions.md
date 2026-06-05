@@ -5,20 +5,35 @@ This document captures the decisions made during Week 1 (data sanity checks
 implementation. Each decision lists the evidence behind it, where it
 applies in the code, and what happens if you find a reason to revisit it.
 
-Last updated: 2026-06-01 (Path A refactor — dual-track evaluation).
+Last updated: 2026-06-05 (added decision 12 — centralized recipe feature engineering).
 
 ---
 
-## 1. Training cohort = authors' pre-split train (25K active users)
+## 1. Training cohort = authors' pre-split train (25K users)
 
-**Decision** (refined 2026-06-01): Use the authors' published `interactions_train.csv`
-from Majumder et al. 2019 as the training cohort. This is pre-filtered to
-**24,961 active users with 698,901 interactions** (681,944 after dropping
-0-star "review without rating" entries).
+**Decision** (refined 2026-06-01, clarified 2026-06-05): Use the authors'
+published `interactions_train.csv` from Majumder et al. 2019 as the
+training cohort. This contains **24,961 users with 698,901 interactions**
+(681,944 after dropping 0-star "review without rating" entries).
+
+**Important clarification (2026-06-05)**: contrary to a previous assumption,
+this train file is **NOT** pre-filtered to `≥5 ratings per user`. Empirically,
+the activity distribution within the cohort is:
+
+- **low**    (<5 ratings):  ~10,300 users (~41%)
+- **medium** (5-19):        ~9,500 users  (~38%)
+- **high**   (≥20):         ~5,100 users  (~21%)
+
+(verified via `classify_user_activity(load_train_interactions())` — see
+`src/data/features.py`). The authors' filter is "users with sufficient
+activity for the published evaluation"; the precise threshold isn't
+documented in the paper, but it is NOT a simple min-ratings cut.
 
 We previously used the raw interactions with our own `filter_active_users(min_ratings=5)`
-which produced 22,018 active users. The new approach is functionally similar
-but uses the published filter for consistency with the original paper.
+which produced 22,018 active users. The current approach uses the authors'
+published filter for consistency with the original paper. The wider activity
+spread is a feature: it lets us stratify Stage 1 results by user activity
+tier (cold-start vs. warm-start users) without rebuilding the cohort.
 
 **Where it applies**:
 - `src.data.loader.load_train_interactions()` — preferred
@@ -149,7 +164,7 @@ held out by virtue of having only one positive — see edge cases below).
 | 2 | MF / ALS (Cornac) | W1 | Rating-prediction reference baseline |
 | 3 | **EASE** | W1-W3 | Closed-form implicit-feedback shallow |
 | 4 | BPR (Cornac) | W3 | SGD pairwise implicit ranker |
-| 5 | Content TF-IDF (ingredients + tags + nutrition) | W4 | Content-only reference |
+| 5 | **Tag SVD content** (100-dim tag SVD + 7-dim nutrition) | W4 | Content-only reference (features pre-built in `src/data/features.py`) |
 | 6 | **Two-tower neural** (replaces NCF) | W4-W5 | Deep + multimodal-ready |
 | 7 | Hybrid linear (α·CF + (1-α)·content) | W5 | Combination |
 | 8 | Sentence-BERT content | W9 | Modern semantic content |
@@ -414,11 +429,83 @@ glues it to the data.
 
 ---
 
+## 12. Centralized recipe features = 100-dim tag SVD + 7-dim normalized nutrition
+
+**Decision** (new 2026-06-05): all content/hybrid/two-tower models share
+one canonical recipe feature matrix instead of each model rolling its own.
+The matrix lives in `src/data/features.py` and is cached at
+`data/processed/recipe_features.parquet` (231,637 recipes × 107 features).
+
+### Pipeline (in `src/data/features.py`)
+
+1. **Tag selection** (`select_useful_tags`): from ~550 raw recipe tags, drop
+   8 meta tags (category headers like `'preparation'`, `'course'`) and
+   require BOTH (a) frequency ≥100 recipes, AND (b) interaction-weighted
+   `content_pct ≥1%`. Yields ~140 useful tags.
+
+2. **Tag SVD** (`build_tag_features`): `MultiLabelBinarizer` → L2 row-normalize
+   → `TruncatedSVD(n_components=100, random_state=42)`. Dense 100-dim
+   recipe embedding capturing co-occurrence structure.
+
+3. **Nutrition** (`build_nutrition_features`): parse the 7-element list
+   (`calories, total_fat_pdv, sugar_pdv, sodium_pdv, protein_pdv,
+   saturated_fat_pdv, carbs_pdv`), clip at the 99th percentile per column,
+   then `RobustScaler` (median/IQR). Robust to the heavy-tailed outliers
+   already documented in decision 9.
+
+4. **Concatenate** → 107-dim matrix, indexed by `recipe_id`. Fitted models
+   (MLB, SVD, RobustScaler) are pickled alongside so inference on new
+   recipes uses the same transforms.
+
+### Why centralize
+
+- **Reproducibility**: every content-aware Stage 1 model uses the same
+  representation, so Track B comparisons reflect modeling differences, not
+  feature-engineering differences.
+- **Time savings**: 52s to build, 3.5s to load from cache. Saves 4-8 hours
+  per content/hybrid model author who would otherwise have to design
+  features from scratch.
+- **Track B coverage**: 100% of the 231K recipes have features (no nulls),
+  so cold-item evaluation never silently drops candidates.
+
+### Companion utility — `classify_user_activity`
+
+Same module also exposes a 3-tier user classifier (low / medium / high
+activity based on rating count). Useful for stratified Stage 1 reporting
+and for the Stage 2 reranker α-sensitivity story (do low-activity users
+need a different α-mix than high-activity?).
+
+### Credits
+
+The pipeline is ported from teammate Anastasia's Kaggle EDA notebook
+(`notebooks/anastasia_kaggle.ipynb`). The port standardizes the API,
+adds tests (`tests/test_features.py`, 14 passing), and integrates with
+our `load_train_interactions()` cohort.
+
+### Where it applies
+
+- `src/data/features.py` — the canonical feature module
+- `data/processed/recipe_features.parquet` (gitignored) — the cached matrix
+- `data/processed/{tag_svd_model,nutrition_scaler,tag_mlb}.pkl` — fitted transforms
+- `tests/test_features.py` — 14 tests covering tag selection, SVD, nutrition, user tiers
+
+### If you want to revisit
+
+- Bumping `n_components` from 100 to 200 is fine if a downstream model
+  shows it helps (the SVD is fast enough to re-fit). Document it.
+- Adding text features (ingredient bag-of-words, name embeddings, etc.)
+  should extend this matrix, not create a parallel pipeline.
+- Sentence-BERT embeddings will be a separate file (`recipe_sbert.parquet`)
+  because their 384-dim vectors deserve their own representation; the
+  hybrid model can concatenate the two as needed.
+
+---
+
 ## Summary table
 
 | # | Decision | Default value | Code reference |
 |---|---|---|---|
-| 1 | Training cohort | authors' pre-split (24,961 active users / 681K interactions) | `load_train_interactions()` |
+| 1 | Training cohort | authors' pre-split (24,961 users / 681K interactions, wide activity spread) | `load_train_interactions()` |
 | 1b | Evaluation | dual-track: warm-item LOO + cold-item (authors' test) | `time_based_split`, `load_test_interactions` |
 | 2 | Drop 0-star ratings | True | `load_train_interactions(drop_zero_stars=True)` |
 | 3 | Positive threshold | 4 stars | `POSITIVE_THRESHOLD = 4` |
@@ -430,4 +517,5 @@ glues it to the data.
 | 8 | Diet enforcement | tag OR derived rule, AND ingredient blocklist | `src/reranker/diet.py` (W4) |
 | 9 | Nutrition clipping | calories ≤ 5000 kcal; PDV ≤ 1000% | `parse_nutrition` |
 | 10 | Persona pantry size | 25-35 user-specific items (staples are project-wide) | `data/personas/*.json` |
-| 11 | Eval harness | Week 2 Day-1, supports both tracks via `track=` param | `src/eval/harness.py` (W2) |
+| 11 | Eval harness | Week 2 Day-1, supports both tracks via `track=` param | `src/eval/harness.py` |
+| 12 | Recipe features | 100-dim tag SVD + 7-dim normalized nutrition, cached as parquet | `src/data/features.py` |
