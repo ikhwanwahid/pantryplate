@@ -29,3 +29,6 @@ packages = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = [
+    "slow: tests that load the real Sentence-BERT model or encode the full catalogue (>30s).",
+]

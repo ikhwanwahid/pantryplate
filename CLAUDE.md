@@ -25,7 +25,8 @@ If you're going to make any non-trivial change, read these first:
 | 2 | `docs/week2_onboarding.md` | ⭐ Comprehensive onboarding (~30 min read). Data file routing, model contract, locked decisions, conventions, troubleshooting, glossary. |
 | 3 | `docs/data_decisions.md` | The 12 locked decisions with empirical evidence. If your instinct conflicts with one of these, the decision wins. |
 | 4 | `docs/eval_harness_usage.md` | How to evaluate any Stage 1 model. The harness is the single sanctioned eval path. |
-| 5 | `PantryPlate_Proposal.pdf` | The submitted proposal. Captures the project's pitch and architecture. |
+| 5 | `docs/stage1_leaderboard.md` | Living Stage 1 model leaderboard (Recall@10 + @100 across val/warm/cold). Where teammates see current scores and how to add their model. |
+| 6 | `PantryPlate_Proposal.pdf` | The submitted proposal. Captures the project's pitch and architecture. |
 
 ---
 

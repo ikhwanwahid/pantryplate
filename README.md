@@ -159,12 +159,14 @@ That doc covers:
 - Pointers to deeper reading (proposal deck, EDA notebook, walkthrough)
 - ⭐ **The data routing** — which CSV file feeds which evaluation track. This is the single most-misunderstood thing in the project; read it twice.
 - The Stage 1 model interface contract
-- The 11 locked decisions you must respect
-- Numbers your model should beat (popularity floor: Recall@10 ≈ 3.04%)
+- The 12 locked decisions you must respect
+- Numbers your model should beat (popularity floor: Recall@10 ≈ 3.0%)
 - Conventions (naming, file structure, determinism, where to commit)
 - Quickstart template for new models
 
-After onboarding, plug your Stage 1 model into the harness via [`docs/eval_harness_usage.md`](docs/eval_harness_usage.md).
+After onboarding:
+- Plug your Stage 1 model into the harness via [`docs/eval_harness_usage.md`](docs/eval_harness_usage.md).
+- Drop your model's numbers into the **[Stage 1 leaderboard](docs/stage1_leaderboard.md)** — living doc that's the source of truth on model performance.
 
 ---
 

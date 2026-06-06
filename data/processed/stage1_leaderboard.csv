@@ -1,0 +1,5 @@
+model,val_r10,val_r100,warm_r10,warm_r100,cold_r10,cold_r100
+Popularity,0.0,0.0,2.95,11.55,0.0,0.0
+Tag SVD content,0.017,0.288,0.0,0.5,0.01,0.164
+SBERT content,0.169,0.373,0.15,0.7,0.087,0.452
+SBERT + Tag SVD (w=0.25),0.102,0.458,0.1,0.8,0.087,0.366

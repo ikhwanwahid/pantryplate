@@ -46,6 +46,7 @@ import pandas as pd
 from src.data.loader import (
     load_test_interactions,
     load_train_interactions,
+    load_validation_interactions,
     time_based_split,
 )
 from src.eval.metrics import recall_at_k, ndcg_at_k, mrr
@@ -82,8 +83,16 @@ def _load_test_set(track: str, data_path: str | Path) -> pd.DataFrame:
         _TEST_SET_CACHE[cache_key] = test_cold
         return test_cold
 
+    elif track == "validation":
+        # Authors' pre-split validation file. Use for hyperparameter selection
+        # (profile strategy, score blending, encoder choice). Reserve "warm"
+        # and "cold" for the FINAL evaluation so we don't tune on test.
+        val = load_validation_interactions(path=data_path)
+        _TEST_SET_CACHE[cache_key] = val
+        return val
+
     else:
-        raise ValueError(f"track must be 'warm' or 'cold', got {track!r}")
+        raise ValueError(f"track must be 'warm', 'cold', or 'validation', got {track!r}")
 
 
 def evaluate(
@@ -104,13 +113,16 @@ def evaluate(
         Any object with a `.recommend(user_id, k, exclude_seen)` method.
         Must have been `.fit()` on training data that excludes any
         test-set holdouts for the chosen track.
-    track : {"warm", "cold"}
+    track : {"warm", "cold", "validation"}
         - "warm" : Track A — time-based LOO holdout from authors' train.
           Items have rater history. All Stage 1 models compete here.
         - "cold" : Track B — authors' pre-split test file.
           Items have ZERO raters in train. Only content-aware models
           can meaningfully compete; CF-only models will (correctly) score
           ~0 by construction.
+        - "validation" : authors' pre-split validation file. Use for
+          hyperparameter selection (profile strategy, score blending,
+          etc.). Don't tune on warm/cold — those are for final reporting.
     k_values : tuple[int, ...]
         K cutoffs for Recall@K and NDCG@K. Default (5, 10, 20).
     n_users : int or None
@@ -140,8 +152,8 @@ def evaluate(
         seed : int
         per_user : pd.DataFrame  (only if return_per_user=True)
     """
-    if track not in ("warm", "cold"):
-        raise ValueError(f"track must be 'warm' or 'cold', got {track!r}")
+    if track not in ("warm", "cold", "validation"):
+        raise ValueError(f"track must be 'warm', 'cold', or 'validation', got {track!r}")
 
     test_df = _load_test_set(track, data_path)
     truth = test_df.groupby("user_id")["recipe_id"].agg(set).to_dict()
