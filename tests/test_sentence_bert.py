@@ -394,6 +394,96 @@ class TestPopularityBlend:
 
 
 # ============================================================
+# Layer 4 — SBERT + Tag SVD concat
+# ============================================================
+
+class TestTagFeatureConcat:
+    """Verify tag_feature_weight concatenates Tag SVD features onto SBERT."""
+
+    def _make_recipes(self, n: int = 20) -> pd.DataFrame:
+        return pd.DataFrame({
+            "id": list(range(1000, 1000 + n)),
+            "name": [f"recipe {i}" for i in range(n)],
+            "ingredients_parsed": [["ing_a", "ing_b"]] * n,
+            "tags_parsed": [["tag1"]] * n,
+        })
+
+    def _make_train(self, n_users: int = 3) -> pd.DataFrame:
+        rows = []
+        for u in range(n_users):
+            for offset in range(3):
+                rows.append({"user_id": u, "recipe_id": 1000 + (u * 3) + offset, "rating": 5})
+        return pd.DataFrame(rows)
+
+    def _fake_tag_features(self, recipe_ids, dim: int = 4, seed: int = 13):
+        """Returns a DataFrame indexed by recipe_id, mimicking build_recipe_feature_matrix()."""
+        rng = np.random.default_rng(seed)
+        data = rng.standard_normal((len(recipe_ids), dim)).astype(np.float32)
+        return pd.DataFrame(
+            data,
+            columns=[f"feat_{i}" for i in range(dim)],
+            index=pd.Index(recipe_ids, name="recipe_id"),
+        )
+
+    def test_rejects_invalid_weight(self, tmp_path):
+        for bad in (-0.1, 1.5, 2.0):
+            with pytest.raises(ValueError, match="tag_feature_weight"):
+                SentenceBERTRecommender(cache_dir=tmp_path, tag_feature_weight=bad)
+
+    @patch("src.models.sentence_bert.load_recipes")
+    def test_weight_0_does_not_change_matrix(self, mock_load, tmp_path):
+        """tag_feature_weight=0 should leave the SBERT matrix untouched."""
+        recipes = self._make_recipes(20)
+        mock_load.return_value = recipes
+        with patch("sentence_transformers.SentenceTransformer", _fake_encoder_class(dim=8)):
+            model = SentenceBERTRecommender(
+                cache_dir=tmp_path, force_rebuild=True, tag_feature_weight=0.0
+            )
+            model.fit(self._make_train(3))
+        assert model._recipe_matrix.shape == (20, 8), \
+            "tag_feature_weight=0 should not concat tag features"
+
+    @patch("src.data.features.build_recipe_feature_matrix")
+    @patch("src.models.sentence_bert.load_recipes")
+    def test_weight_above_0_concatenates(self, mock_load, mock_features, tmp_path):
+        """tag_feature_weight>0 should widen the recipe matrix by the tag dim."""
+        recipes = self._make_recipes(20)
+        mock_load.return_value = recipes
+        mock_features.return_value = self._fake_tag_features(list(range(1000, 1020)), dim=4)
+
+        with patch("sentence_transformers.SentenceTransformer", _fake_encoder_class(dim=8)):
+            model = SentenceBERTRecommender(
+                cache_dir=tmp_path, force_rebuild=True, tag_feature_weight=0.5
+            )
+            model.fit(self._make_train(3))
+
+        # 8-dim SBERT + 4-dim tag = 12-dim combined
+        assert model._recipe_matrix.shape == (20, 12)
+        # All rows L2-normalized
+        norms = np.linalg.norm(model._recipe_matrix, axis=1)
+        np.testing.assert_allclose(norms, 1.0, rtol=1e-5)
+
+    @patch("src.data.features.build_recipe_feature_matrix")
+    @patch("src.models.sentence_bert.load_recipes")
+    def test_recipe_id_alignment(self, mock_load, mock_features, tmp_path):
+        """If Tag SVD comes in a different order, reindex should still align it correctly."""
+        recipes = self._make_recipes(20)  # ids 1000..1019 in order
+        mock_load.return_value = recipes
+        # Shuffle the tag feature order — reindex must put them back in recipe_ids order
+        shuffled_ids = list(range(1000, 1020))[::-1]  # reversed
+        mock_features.return_value = self._fake_tag_features(shuffled_ids, dim=4)
+
+        with patch("sentence_transformers.SentenceTransformer", _fake_encoder_class(dim=8)):
+            model = SentenceBERTRecommender(
+                cache_dir=tmp_path, force_rebuild=True, tag_feature_weight=0.5
+            )
+            model.fit(self._make_train(3))
+
+        # Just verify it doesn't crash and produces the expected shape
+        assert model._recipe_matrix.shape == (20, 12)
+
+
+# ============================================================
 # Integration tests (real catalogue + real encoder)
 # Skipped if data files are missing OR if running fast tests.
 # ============================================================

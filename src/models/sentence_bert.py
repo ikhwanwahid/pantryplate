@@ -91,6 +91,18 @@ class SentenceBERTRecommender:
         Half-life of the recency weight (in days). Only used by recency_weighted.
         Default 180 (≈6 months): a 1-year-old rating counts ~25%; a 3-year-old
         rating counts ~3%.
+    tag_feature_weight : float in [0, 1]
+        If > 0, concatenate the 107-dim Tag SVD + nutrition vector from
+        `src/data/features.py` onto the SBERT embedding (per-block L2-norm,
+        sqrt-weighted, then re-L2). Algebraically this makes cosine in the
+        combined space equal to:
+            (1 - tag_feature_weight) * cos(sbert_parts) +
+            tag_feature_weight       * cos(tag_parts)
+        - tag_feature_weight=0.0 (default): pure SBERT (current behavior)
+        - tag_feature_weight=1.0: pure Tag SVD/nutrition
+        - intermediate: weighted blend of two CONTENT spaces (unlike layer 3
+          which blends content vs popularity)
+        This is fit-time because the recipe matrix dimensionality changes.
     content_weight : float in [0, 1]
         Stage-1-internal blend between content and popularity signals:
             score = content_weight * cosine + (1 - content_weight) * popularity_score
@@ -124,6 +136,7 @@ class SentenceBERTRecommender:
         positive_threshold: int = POSITIVE_THRESHOLD,
         profile_strategy: str = "mean",
         recency_half_life_days: int = 180,
+        tag_feature_weight: float = 0.0,
         content_weight: float = 1.0,
         cache_dir: Path = SBERT_CACHE_DIR,
         batch_size: int = 128,
@@ -139,12 +152,15 @@ class SentenceBERTRecommender:
             raise ValueError(
                 f"content_weight must be in [0, 1], got {content_weight}"
             )
-        # Note: parameter renamed from popularity_blend_alpha for clarity —
-        # content_weight=1.0 means "100% content, 0% popularity".
+        if not 0.0 <= tag_feature_weight <= 1.0:
+            raise ValueError(
+                f"tag_feature_weight must be in [0, 1], got {tag_feature_weight}"
+            )
         self.model_name = model_name
         self.positive_threshold = positive_threshold
         self.profile_strategy = profile_strategy
         self.recency_half_life_days = recency_half_life_days
+        self.tag_feature_weight = tag_feature_weight
         self.content_weight = content_weight
         self.cache_dir = Path(cache_dir)
         self.batch_size = batch_size
@@ -187,6 +203,13 @@ class SentenceBERTRecommender:
             self._recipe_matrix = self._encode_recipes(recipes)
             self.cache_dir.mkdir(parents=True, exist_ok=True)
             np.save(cache_path, self._recipe_matrix)
+
+        # 1b. Layer 4: optional concat with Tag SVD + nutrition features.
+        # Each block is L2-normed individually, sqrt-weighted, then concatenated;
+        # the result is re-L2-normed so cosine in the combined space equals
+        # (1-w) * cos(sbert) + w * cos(tag).
+        if self.tag_feature_weight > 0:
+            self._recipe_matrix = self._concat_tag_features(self._recipe_matrix)
 
         # 2. Per-user profile vectors from positives in train
         positives = train_df[train_df["rating"] >= self.positive_threshold]
@@ -283,6 +306,41 @@ class SentenceBERTRecommender:
             normalize_embeddings=True,  # L2-normalize so dot product == cosine sim
         )
         return emb.astype(np.float32, copy=False)
+
+    def _concat_tag_features(self, sbert_matrix: np.ndarray) -> np.ndarray:
+        """Layer 4: concatenate Tag SVD + nutrition features onto SBERT embeddings.
+
+        Each block is L2-normed individually, sqrt-weighted, then concatenated.
+        Re-L2 on the combined vector so cosine in the new space equals:
+            (1 - w) * cos(sbert_parts) + w * cos(tag_parts)
+        """
+        # Lazy import so the SBERT model doesn't depend on features.py unless needed
+        from src.data.features import build_recipe_feature_matrix
+
+        tag_features = build_recipe_feature_matrix()
+        # Align Tag SVD rows to self.recipe_ids order (defensive — they should match)
+        tag_aligned = (
+            tag_features.reindex(self.recipe_ids)
+            .fillna(0.0)
+            .to_numpy(dtype=np.float32)
+        )
+
+        # SBERT block is already L2-normed (the encoder writes normalized vectors).
+        # Normalize the tag block per-row to put both blocks on the same scale.
+        tag_norms = np.linalg.norm(tag_aligned, axis=1, keepdims=True)
+        tag_norms[tag_norms == 0] = 1.0
+        tag_normalized = tag_aligned / tag_norms
+
+        w = self.tag_feature_weight
+        combined = np.hstack([
+            np.sqrt(1.0 - w) * sbert_matrix,
+            np.sqrt(w)       * tag_normalized,
+        ]).astype(np.float32, copy=False)
+
+        # Re-L2 the combined vectors so cosine is well-defined.
+        norms = np.linalg.norm(combined, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        return (combined / norms).astype(np.float32, copy=False)
 
     def _build_user_profiles(self, positives: pd.DataFrame) -> dict[int, np.ndarray]:
         """Aggregate per-user positive recipe embeddings into a single profile vector.
