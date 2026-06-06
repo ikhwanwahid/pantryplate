@@ -190,6 +190,8 @@ gh pr create --title "Claim <model>" --body "Section 4b update."
 
 ### Stage 1 models — coordination
 
+> 📊 **For current numbers**: see the [Stage 1 leaderboard](stage1_leaderboard.md) — living doc with Recall@10 + Recall@100 across val/warm/cold, updated whenever someone lands a new model. Bookmark it.
+
 | Status | Priority | Model | Family | Effort | Difficulty | Source / hint | Why we want it | Owner |
 |---|---|---|---|---|---|---|---|---|
 | ✅ | ref | Popularity | CF baseline | done | — | `src/models/popularity.py` (reference impl) | Baseline floor (~3% Recall@10). Every other model should comfortably beat this. | — |
