@@ -38,5 +38,15 @@
     "ginger",
     "avocado"
   ],
-  "taste_seeds": []
+  "taste_seeds": [
+    82102,
+    16531,
+    52488,
+    31516,
+    15865,
+    46739,
+    97340,
+    39900
+  ],
+  "taste_seeds_notes": "Eight high-protein, lean-prep main dishes (~410-585 kcal, 51-103 PDV protein). Examples: oven-fried chicken breast, garlic brown sugar chicken, Spanish chicken-rice bake, PF Chang's chicken lettuce wraps, Applebee's honey grilled salmon, grilled chicken legs, skillet parmesan chicken. Picked from popular (≥100 raters) recipes matching the persona's macro targets."
 }
