@@ -248,6 +248,43 @@ def pantry_pool_for_walkin(sbert, pantry_text: list[str], encoder, k: int) -> tu
     return ids, scores
 
 
+def categorize_ingredients(
+    recipe_ings: list[str],
+    user_pantry: list[str],
+) -> tuple[list[str], list[str], list[str]]:
+    """Split a recipe's ingredients into (in_pantry, staples, missing).
+
+    - in_pantry: non-staple ingredients the user has → ✓ green
+    - staples : universal pantry items → ➖ grey ("assumed")
+    - missing : non-staple items the user lacks  → ✗ red ("need to buy")
+
+    Uses substring matching against the pantry items so "chicken breast"
+    matches when user has "chicken" in their pantry.
+    """
+    from src.reranker import STAPLES
+
+    pantry_lower = {p.lower().strip() for p in user_pantry}
+    in_pantry: list[str] = []
+    staples: list[str] = []
+    missing: list[str] = []
+
+    for ing in recipe_ings:
+        if not isinstance(ing, str):
+            continue
+        ing_low = ing.lower().strip()
+        if ing_low in STAPLES:
+            staples.append(ing)
+            continue
+        # Substring match either way: user pantry may be "chicken" while
+        # recipe ingredient is "chicken breast", or vice versa
+        matched = any(p in ing_low or ing_low in p for p in pantry_lower)
+        if matched:
+            in_pantry.append(ing)
+        else:
+            missing.append(ing)
+    return in_pantry, staples, missing
+
+
 def render_recipe_card(rank: int, recipe_id: int, name: str, scored_row: pd.Series) -> str:
     """Render a single recipe as a styled HTML card."""
     rank_class = f"rank-{rank}" if rank <= 3 else ""
@@ -437,26 +474,77 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("## What matters to you?")
-    st.caption("The α weights below blend taste, pantry, and nutrition. They're normalized to sum to 1.")
+    st.caption("Move one slider and the other two rebalance automatically — the three always sum to 1.")
 
-    alpha_taste_raw = st.slider("🍴 Taste", 0.0, 1.0, 0.50, 0.05,
-                                 help="How much to favor Stage 1's content-based ranking.")
-    alpha_pantry_raw = st.slider("🥕 Pantry match", 0.0, 1.0, 0.30, 0.05,
-                                 help="How much to favor recipes you can mostly cook from your pantry.")
-    alpha_nutrition_raw = st.slider("🥗 Macros", 0.0, 1.0, 0.20, 0.05,
-                                    help="How much to favor recipes near your macro targets.")
-    alpha_taste, alpha_pantry, alpha_nutrition = normalize_alphas(
-        alpha_taste_raw, alpha_pantry_raw, alpha_nutrition_raw
+    # Initialize the simplex with defaults (0.5, 0.3, 0.2)
+    if "alpha_taste" not in st.session_state:
+        st.session_state["alpha_taste"]     = 0.50
+        st.session_state["alpha_pantry"]    = 0.30
+        st.session_state["alpha_nutrition"] = 0.20
+
+    def _rebalance(changed: str) -> None:
+        """When one slider moves, redistribute the remaining 1 - x across the
+        other two in proportion to their *previous* ratio. Preserves user
+        intent — if you had pantry > nutrition, you keep that ordering."""
+        keys = ["alpha_taste", "alpha_pantry", "alpha_nutrition"]
+        others = [k for k in keys if k != changed]
+        x = float(st.session_state[changed])
+        x = max(0.0, min(1.0, x))
+        remainder = 1.0 - x
+        a, b = float(st.session_state[others[0]]), float(st.session_state[others[1]])
+        total_other = a + b
+        if remainder <= 0:
+            st.session_state[others[0]] = 0.0
+            st.session_state[others[1]] = 0.0
+        elif total_other < 1e-9:
+            st.session_state[others[0]] = remainder / 2
+            st.session_state[others[1]] = remainder / 2
+        else:
+            st.session_state[others[0]] = remainder * a / total_other
+            st.session_state[others[1]] = remainder * b / total_other
+
+    st.slider(
+        "🍴 Taste", 0.0, 1.0, step=0.01, key="alpha_taste",
+        on_change=_rebalance, args=("alpha_taste",),
+        help="Stage 1's content-based ranking weight.",
     )
+    st.slider(
+        "🥕 Pantry match", 0.0, 1.0, step=0.01, key="alpha_pantry",
+        on_change=_rebalance, args=("alpha_pantry",),
+        help="Favor recipes you can mostly cook from your pantry.",
+    )
+    st.slider(
+        "🥗 Macros", 0.0, 1.0, step=0.01, key="alpha_nutrition",
+        on_change=_rebalance, args=("alpha_nutrition",),
+        help="Favor recipes near your macro targets.",
+    )
+
+    alpha_taste     = float(st.session_state["alpha_taste"])
+    alpha_pantry    = float(st.session_state["alpha_pantry"])
+    alpha_nutrition = float(st.session_state["alpha_nutrition"])
+
+    # Sanity / display — values now always sum to ~1
+    total_show = alpha_taste + alpha_pantry + alpha_nutrition
     st.markdown(
         f"""
         <div class='alpha-summary'>
-            normalized<br>
+            current mix (sum = {total_show:.2f})<br>
             🍴 {alpha_taste:.2f} &nbsp; 🥕 {alpha_pantry:.2f} &nbsp; 🥗 {alpha_nutrition:.2f}
         </div>
         """,
         unsafe_allow_html=True,
     )
+
+    # Quick presets for live demo — one click jumps to a simplex corner
+    pc1, pc2, pc3, pc4 = st.columns(4)
+    def _set_alpha(t: float, p: float, n: float) -> None:
+        st.session_state["alpha_taste"]     = t
+        st.session_state["alpha_pantry"]    = p
+        st.session_state["alpha_nutrition"] = n
+    if pc1.button("⚖️ Balanced",  use_container_width=True): _set_alpha(0.50, 0.30, 0.20)
+    if pc2.button("🍴 Taste",      use_container_width=True): _set_alpha(1.00, 0.00, 0.00)
+    if pc3.button("🥕 Pantry",     use_container_width=True): _set_alpha(0.00, 1.00, 0.00)
+    if pc4.button("🥗 Macros",     use_container_width=True): _set_alpha(0.00, 0.00, 1.00)
 
     st.markdown("---")
     k_show = st.number_input("How many recipes to show?", min_value=3, max_value=20, value=10, step=1)
@@ -529,10 +617,98 @@ with col_main:
         st.warning("No candidates to show. Try a different mode or input.")
     else:
         for i, row in scored.iterrows():
-            name = recipes.loc[row["recipe_id"], "name"] if row["recipe_id"] in recipes.index else "(unknown)"
-            st.markdown(render_recipe_card(rank=i + 1, recipe_id=int(row["recipe_id"]),
-                                           name=name, scored_row=row),
-                        unsafe_allow_html=True)
+            rid = int(row["recipe_id"])
+            recipe_row = recipes.loc[rid] if rid in recipes.index else None
+            name = recipe_row["name"] if recipe_row is not None else "(unknown)"
+            st.markdown(
+                render_recipe_card(rank=i + 1, recipe_id=rid, name=name, scored_row=row),
+                unsafe_allow_html=True,
+            )
+
+            # Expandable breakdown: ingredients (with pantry overlap visible)
+            # + nutrition + tags. Makes the "pantry match" claim concrete for
+            # live demo audience.
+            if recipe_row is not None:
+                with st.expander("📋 Show ingredients & nutrition"):
+                    ings = recipe_row.get("ingredients_parsed") or []
+                    tags = recipe_row.get("tags_parsed") or []
+                    nutrition = recipe_row.get("nutrition_parsed") or {}
+                    in_p, staples, missing = categorize_ingredients(
+                        ings, active_persona.get("pantry", [])
+                    )
+
+                    icol1, icol2 = st.columns([2, 1])
+                    with icol1:
+                        st.markdown("**🥕 Ingredients**")
+                        if in_p:
+                            st.markdown(
+                                "<span style='color:#3C5E26'>✓ in your pantry</span>",
+                                unsafe_allow_html=True,
+                            )
+                            st.markdown(
+                                "<ul style='margin-top:0;color:#3C5E26'>"
+                                + "".join(f"<li>{ing}</li>" for ing in in_p)
+                                + "</ul>",
+                                unsafe_allow_html=True,
+                            )
+                        if staples:
+                            st.markdown(
+                                "<span style='color:#6E6F75'>➖ assumed staples</span>",
+                                unsafe_allow_html=True,
+                            )
+                            st.markdown(
+                                "<ul style='margin-top:0;color:#6E6F75'>"
+                                + "".join(f"<li>{ing}</li>" for ing in staples)
+                                + "</ul>",
+                                unsafe_allow_html=True,
+                            )
+                        if missing:
+                            st.markdown(
+                                f"<span style='color:#8B3826'>✗ need to buy "
+                                f"({len(missing)} item{'s' if len(missing) != 1 else ''})</span>",
+                                unsafe_allow_html=True,
+                            )
+                            st.markdown(
+                                "<ul style='margin-top:0;color:#8B3826'>"
+                                + "".join(f"<li>{ing}</li>" for ing in missing)
+                                + "</ul>",
+                                unsafe_allow_html=True,
+                            )
+                        if not (in_p or staples or missing):
+                            st.caption("(no ingredients parsed)")
+
+                    with icol2:
+                        st.markdown("**🥗 Nutrition per serving**")
+                        if nutrition:
+                            for field, label in [
+                                ("calories",    "Calories"),
+                                ("protein_pdv", "Protein"),
+                                ("carbs_pdv",   "Carbs"),
+                                ("fat_pdv",     "Fat"),
+                                ("sodium_pdv",  "Sodium"),
+                            ]:
+                                val = nutrition.get(field)
+                                if val is None:
+                                    continue
+                                unit = "" if field == "calories" else "% PDV"
+                                target = active_persona.get("macro_targets", {}).get(field)
+                                if target:
+                                    delta_pct = (val - target) / target * 100
+                                    delta_str = f" ({delta_pct:+.0f}% vs target)"
+                                else:
+                                    delta_str = ""
+                                st.markdown(
+                                    f"- **{label}**: {val:.0f}{unit}{delta_str}"
+                                )
+                        else:
+                            st.caption("(no nutrition data)")
+
+                        if tags:
+                            st.markdown("**🏷️ Tags**")
+                            shown = [t for t in tags if isinstance(t, str)][:8]
+                            st.markdown(
+                                " ".join(f"`{t}`" for t in shown)
+                            )
 
 with col_side:
     st.markdown("### What's happening?")
