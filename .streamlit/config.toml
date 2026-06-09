@@ -1,0 +1,18 @@
+# PantryPlate — warm food-app theme.
+# Palette: cream background, terracotta primary, sage secondary,
+# charcoal text. Designed to feel like a recipe app, not a notebook.
+
+[theme]
+base = "light"
+primaryColor = "#C75D2C"          # terracotta — primary actions, accents
+backgroundColor = "#FAF8F3"       # warm cream — main background
+secondaryBackgroundColor = "#F1ECE0"  # softer cream — sidebar, cards
+textColor = "#2D3142"             # charcoal — body text
+font = "serif"
+
+[server]
+runOnSave = true
+headless = true
+
+[browser]
+gatherUsageStats = false

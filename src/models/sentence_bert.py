@@ -289,6 +289,170 @@ class SentenceBERTRecommender:
         return {int(uid): self.recommend(int(uid), k=k, exclude_seen=exclude_seen) for uid in user_ids}
 
     # ---------------------------------------------------------------------
+    # Seed-based recommend — for personas + walk-in users (no user_id needed)
+    # ---------------------------------------------------------------------
+    def recommend_for_seeds(
+        self,
+        seed_recipe_ids: Iterable[int],
+        k: int = 100,
+        exclude_seeds: bool = True,
+    ) -> List[int]:
+        """Recommend recipes similar to a list of seed recipe IDs.
+
+        For personas (synthetic users with taste_seeds in their JSON) or for
+        the cold-start onboarding flow where a new user picks a few starter
+        recipes from a Spotify-style onboarding survey.
+
+        The seed embeddings are averaged and re-L2-normalized to form a
+        "persona vector"; recipes are ranked by cosine similarity to it.
+        Seeds themselves are excluded from the result by default.
+
+        Parameters
+        ----------
+        seed_recipe_ids : iterable of int
+            Recipe IDs the persona/user has indicated as exemplary.
+        k : int
+            Number of recommendations to return.
+        exclude_seeds : bool
+            If True (default), drop the seed recipes from the result so
+            the recommendation list is novel.
+
+        Returns
+        -------
+        list[int] — top-k recipe_ids, ordered by cosine similarity desc.
+        Falls back to popularity if NONE of the seeds are in the catalogue.
+        """
+        if self._recipe_matrix.size == 0:
+            raise RuntimeError("Call .fit(train_df) before .recommend_for_seeds(...)")
+
+        seed_rows = [
+            self._recipe_id_to_row[int(rid)]
+            for rid in seed_recipe_ids
+            if int(rid) in self._recipe_id_to_row
+        ]
+        if not seed_rows:
+            return self._popularity_fallback(user_id=-1, k=k, exclude_seen=False)
+
+        seed_vec = self._recipe_matrix[seed_rows].mean(axis=0)
+        norm = float(np.linalg.norm(seed_vec))
+        if norm == 0:
+            return self._popularity_fallback(user_id=-1, k=k, exclude_seen=False)
+        seed_vec = (seed_vec / norm).astype(np.float32, copy=False)
+
+        scores = self._recipe_matrix @ seed_vec  # (n_recipes,) cosine sim
+
+        w = self.content_weight
+        if w < 1.0:
+            scores = w * scores + (1.0 - w) * self._popularity_score
+
+        if exclude_seeds and seed_rows:
+            scores = scores.copy()
+            scores[seed_rows] = -np.inf
+
+        k_eff = min(k, scores.size)
+        top_unsorted = np.argpartition(-scores, k_eff - 1)[:k_eff]
+        top_sorted = top_unsorted[np.argsort(-scores[top_unsorted])]
+        return [int(self.recipe_ids[i]) for i in top_sorted]
+
+    def recommend_for_text(
+        self,
+        seed_texts: Iterable[str],
+        k: int = 100,
+    ) -> List[int]:
+        """Recommend recipes similar to a list of arbitrary text seeds.
+
+        For walk-in users who provide a pantry / ingredient list but no
+        recipe IDs. The texts are encoded with the same sentence-transformer
+        model used for recipe embeddings; the resulting vectors are averaged
+        and used as a query in the same cosine-similarity space.
+
+        Use cases:
+            - Walk-in pantry: ["chicken breast", "rice", "broccoli", ...]
+            - Free-form taste description: ["spicy thai noodles",
+              "vegetarian curries", "quick weeknight meals"]
+
+        Parameters
+        ----------
+        seed_texts : iterable of str
+            Strings to embed. Pantry items, dish names, free text — anything
+            the encoder can produce a vector for.
+        k : int
+            Number of recommendations to return.
+
+        Returns
+        -------
+        list[int] — top-k recipe_ids, ordered by cosine similarity desc.
+        Falls back to popularity if seed_texts is empty.
+
+        Performance note: this loads the encoder lazily and runs a fresh
+        encode pass per call (typically <1s for ≤20 short strings on MPS).
+        Cache the encoded vector externally if you need to call this in a
+        hot path.
+        """
+        if self._recipe_matrix.size == 0:
+            raise RuntimeError("Call .fit(train_df) before .recommend_for_text(...)")
+
+        seeds = [str(t).strip() for t in seed_texts if str(t).strip()]
+        if not seeds:
+            return self._popularity_fallback(user_id=-1, k=k, exclude_seen=False)
+
+        # Lazy-load the encoder. The recipe-matrix cache means we may never
+        # have instantiated SentenceTransformer at fit time.
+        from sentence_transformers import SentenceTransformer
+        encoder = SentenceTransformer(self.model_name, device=self.device)
+
+        # IMPORTANT: when tag_feature_weight>0, the recipe matrix is the
+        # SBERT block sqrt(1-w)-scaled and concat with the tag block. We
+        # only have a text encoder, so we encode the seeds into the SBERT
+        # subspace and zero-pad the tag dimensions to match. This is a
+        # principled choice because the seeds are pure text — they have
+        # no tag features.
+        seed_vecs = encoder.encode(
+            seeds,
+            batch_size=self.batch_size,
+            convert_to_numpy=True,
+            normalize_embeddings=True,
+        ).astype(np.float32)
+        seed_vec_text = seed_vecs.mean(axis=0)
+        norm = float(np.linalg.norm(seed_vec_text))
+        if norm == 0:
+            return self._popularity_fallback(user_id=-1, k=k, exclude_seen=False)
+        seed_vec_text = seed_vec_text / norm
+
+        recipe_dim = self._recipe_matrix.shape[1]
+        text_dim = seed_vec_text.shape[0]
+        if text_dim == recipe_dim:
+            seed_vec = seed_vec_text
+        elif text_dim < recipe_dim:
+            # tag_feature_weight>0 case: recipe matrix has extra tag dims.
+            # Construct a vector with the SBERT block populated (sqrt-weighted
+            # to match the recipe matrix's per-block scaling) and the tag
+            # block zeroed, then re-L2.
+            w = self.tag_feature_weight
+            padded = np.zeros(recipe_dim, dtype=np.float32)
+            padded[:text_dim] = float(np.sqrt(1.0 - w)) * seed_vec_text
+            n2 = float(np.linalg.norm(padded))
+            if n2 == 0:
+                return self._popularity_fallback(user_id=-1, k=k, exclude_seen=False)
+            seed_vec = (padded / n2).astype(np.float32, copy=False)
+        else:
+            raise RuntimeError(
+                f"seed text dim {text_dim} larger than recipe matrix dim {recipe_dim} — "
+                "encoder must match the one used at fit time"
+            )
+
+        scores = self._recipe_matrix @ seed_vec
+
+        w = self.content_weight
+        if w < 1.0:
+            scores = w * scores + (1.0 - w) * self._popularity_score
+
+        k_eff = min(k, scores.size)
+        top_unsorted = np.argpartition(-scores, k_eff - 1)[:k_eff]
+        top_sorted = top_unsorted[np.argsort(-scores[top_unsorted])]
+        return [int(self.recipe_ids[i]) for i in top_sorted]
+
+    # ---------------------------------------------------------------------
     # internals
     # ---------------------------------------------------------------------
     def _encode_recipes(self, recipes: pd.DataFrame) -> np.ndarray:

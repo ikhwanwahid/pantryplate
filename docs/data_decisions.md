@@ -310,35 +310,97 @@ the proposal ("user only needs to buy 3 more things").
 
 ---
 
-## 8. Diet enforcement = (tag OR derived rule) AND ingredient blocklist
+## 8. Diet is a Stage 1 filter, not a Stage 2 multiplicative term
 
-**Decision**: `s_diet` is a hard filter (0/1) computed as follows:
-1. If the dietary restriction has well-covered tags in the dataset
-   (vegan, vegetarian, gluten-free, dairy-free, low-carb, low-fat,
-   low-sodium, low-cholesterol, diabetic, kosher, nut-free, egg-free),
-   check the recipe's tag list.
-2. If the restriction lacks tag coverage (**keto, paleo, whole30,
-   lactose-free, halal, low-sugar**), derive it from macros + ingredient
-   blocklist. Specific derivations TBD per restriction in Week 4.
-3. In **both** cases, AND with an ingredient blocklist (e.g., vegan AND
-   no animal-product ingredients).
+**Decision** (revised 2026-06-09): diet enforcement is a HARD filter
+applied at Stage 1's exit, BEFORE the Stage 2 reranker sees the candidate
+pool. The Stage 2 formula does NOT multiply by `s_diet`.
+
+### The architectural principle
+
+**Hard constraints → Stage 1.** A user who is vegan literally cannot eat
+a chicken recipe. Ranking impossible-to-eat recipes wastes Stage 2's
+budget and produces confusing UX (mostly empty top-K). So we filter
+*before* ranking.
+
+**Soft constraints → Stage 2.** Pantry overlap, macro proximity, and
+content taste similarity are all preferences, not deal-breakers. They
+get continuous scores and are weighted by the (αₜ, αₚ, αₙ) simplex
+sliders — the deck's X-factor.
+
+### The Stage 1 → Stage 2 contract
+
+```python
+raw_candidates = stage1_model.recommend(...)          # diet-blind
+eligible       = filter_by_diet(raw_candidates,       # ←── hard filter
+                                 persona["restrictions"],
+                                 recipes_df,
+                                 target_k=100)
+final_top_k    = stage2_reranker.rerank(persona,      # soft constraints
+                                         eligible, ...)
+```
+
+Stage 1 may need to over-generate (e.g., top-500) so post-filtering still
+yields enough compliant candidates. `filter_by_diet` lives in
+`src/reranker/filtering.py` and preserves Stage 1's ranking order.
+
+### Stage 2 formula (after this revision)
+
+```
+final(u, r) = αₜ·s_taste(u,r) + αₚ·s_pantry(u,r) + αₙ·s_nutrition(u,r)
+```
+
+No `s_diet ×` term. Stage 2 still *computes* `s_diet` per candidate for
+visibility (the "✓ diet OK" badge in the demo) but does not use it in the
+final score. If a non-compliant recipe slips through (caller skipped the
+filter), Stage 2 will still rank it normally — defense-in-depth is the
+caller's job, not the reranker's.
+
+### How diet itself is detected (mechanism unchanged)
+
+`diet_compliant(ingredients, tags, restrictions)` is a tag-AND-blocklist
+check, per the original decision. Both must pass:
+1. The recipe's tag list contains the required tag (when the restriction
+   has tag coverage — vegan, vegetarian, gluten-free, dairy-free,
+   low-carb/fat/sodium/cholesterol, diabetic, kosher, egg-free).
+2. The recipe's ingredient list contains no blocklist substring (e.g.,
+   vegan blocklist excludes chicken/beef/milk/cheese/honey/etc.).
+
+For restrictions without tag coverage (keto, paleo, whole30, lactose-free,
+halal, low-sugar, nut-free), only the ingredient/macro blocklist applies.
 
 **Evidence**:
 - 6 of the 17 desired dietary tags have **zero** recipes in the dataset
 - For the 11 that do have coverage, EDA's consistency check showed
   vegan-tagged recipes contain animal-product ingredients **3.1%** of
-  the time. Tags alone are unreliable for hard filtering.
+  the time — tags alone are unreliable, hence the AND-blocklist check.
+- Empirically: a walk-in user with chicken-heavy pantry + vegan filter
+  produces only 4/100 compliant Stage 1 candidates; expanding to top-500
+  yields 26 compliant → enough to populate the Stage 2 ranking.
 
-**Example derivation rules** (Week 4 will finalize):
+**Example macro-derived rules** (Week 4 will finalize):
 - `keto`: `carbs_pdv < 10` AND no high-carb ingredients (rice, pasta, bread)
 - `lactose-free`: no `milk, cheese, butter, cream, yogurt, ice cream, sour cream`
 - `paleo`: no `grain, legume, sugar, dairy` ingredient families
 - `whole30`: paleo + no `alcohol, MSG, sulfites, carrageenan`
-- `low-sugar`: `sugar_pdv < 5` AND no `sugar, honey, syrup` in top ingredients
+- `low-sugar`: `sugar_pdv < 5` AND no `sugar, honey, syrup`
 - `halal`: no `pork, alcohol, lard, gelatin (from non-halal sources)`
 
-**Where it applies**: `src/reranker/diet.py` (Week 4 work). Derivation
-rules will be in a single `DIET_RULES` dict so they're auditable.
+**Where it applies**:
+- `src/reranker/scores.py` — `diet_compliant`, `INGREDIENT_BLOCKLIST`,
+  `TAG_FOR_RESTRICTION` (per-recipe binary check)
+- `src/reranker/filtering.py` — `filter_by_diet` (pool-level filter)
+- `src/reranker/combiner.py` — `Stage2Reranker.rerank` (assumes input
+  pool is already diet-compliant; reports `s_diet` for visibility only)
+- `streamlit_app.py`, `notebooks/stage2_demo.ipynb` — invoke
+  `filter_by_diet` between Stage 1 and Stage 2
+
+**Why this revision**: the original `final = s_diet × (...)` framing led
+to a bad UX when Stage 1 (content/CF) surfaced mostly non-compliant
+candidates — the multiplicative zero made Stage 2 look broken. Moving
+the filter upstream is the cleaner pattern used in production recsys
+pipelines: candidate generation is for *eligibility*, ranking is for
+*preference*.
 
 ---
 

@@ -484,6 +484,137 @@ class TestTagFeatureConcat:
 
 
 # ============================================================
+# Seed-based recommend (recommend_for_seeds, recommend_for_text)
+# ============================================================
+
+class TestRecommendForSeeds:
+    """Persona / walk-in mode — recommend without a user_id, using seed recipes."""
+
+    def _make_recipes(self, n: int = 20) -> pd.DataFrame:
+        return pd.DataFrame({
+            "id": list(range(1000, 1000 + n)),
+            "name": [f"recipe {i}" for i in range(n)],
+            "ingredients_parsed": [["ing_a", "ing_b"]] * n,
+            "tags_parsed": [["tag1"]] * n,
+        })
+
+    def _make_train(self, n_users: int = 3) -> pd.DataFrame:
+        rows = []
+        for u in range(n_users):
+            for offset in range(3):
+                rows.append({"user_id": u, "recipe_id": 1000 + (u * 3) + offset, "rating": 5})
+        return pd.DataFrame(rows)
+
+    @patch("src.models.sentence_bert.load_recipes")
+    def test_returns_k_ints(self, mock_load, tmp_path):
+        mock_load.return_value = self._make_recipes(20)
+        with patch("sentence_transformers.SentenceTransformer", _fake_encoder_class(dim=8)):
+            model = SentenceBERTRecommender(cache_dir=tmp_path, force_rebuild=True)
+            model.fit(self._make_train(3))
+        recs = model.recommend_for_seeds([1000, 1001, 1002], k=5)
+        assert isinstance(recs, list)
+        assert len(recs) == 5
+        assert all(isinstance(r, int) for r in recs)
+
+    @patch("src.models.sentence_bert.load_recipes")
+    def test_excludes_seeds_by_default(self, mock_load, tmp_path):
+        mock_load.return_value = self._make_recipes(20)
+        with patch("sentence_transformers.SentenceTransformer", _fake_encoder_class(dim=8)):
+            model = SentenceBERTRecommender(cache_dir=tmp_path, force_rebuild=True)
+            model.fit(self._make_train(3))
+        seeds = [1000, 1001, 1002]
+        recs = model.recommend_for_seeds(seeds, k=15)
+        assert not (set(recs) & set(seeds))
+
+    @patch("src.models.sentence_bert.load_recipes")
+    def test_can_keep_seeds_in_results(self, mock_load, tmp_path):
+        """exclude_seeds=False — seeds may still rank highly (they're similar to themselves)."""
+        mock_load.return_value = self._make_recipes(20)
+        with patch("sentence_transformers.SentenceTransformer", _fake_encoder_class(dim=8)):
+            model = SentenceBERTRecommender(cache_dir=tmp_path, force_rebuild=True)
+            model.fit(self._make_train(3))
+        recs = model.recommend_for_seeds([1000], k=20, exclude_seeds=False)
+        # Seed should appear (high cosine with itself)
+        assert 1000 in recs
+
+    @patch("src.models.sentence_bert.load_recipes")
+    def test_empty_seeds_falls_back_to_popularity(self, mock_load, tmp_path):
+        mock_load.return_value = self._make_recipes(20)
+        with patch("sentence_transformers.SentenceTransformer", _fake_encoder_class(dim=8)):
+            model = SentenceBERTRecommender(cache_dir=tmp_path, force_rebuild=True)
+            model.fit(self._make_train(3))
+        recs = model.recommend_for_seeds([], k=5)
+        # Should match pure popularity ranking
+        assert recs[0] == model._popularity_rank[0]
+
+    @patch("src.models.sentence_bert.load_recipes")
+    def test_unknown_seeds_fall_back_to_popularity(self, mock_load, tmp_path):
+        """All-unknown seed IDs → popularity fallback."""
+        mock_load.return_value = self._make_recipes(20)
+        with patch("sentence_transformers.SentenceTransformer", _fake_encoder_class(dim=8)):
+            model = SentenceBERTRecommender(cache_dir=tmp_path, force_rebuild=True)
+            model.fit(self._make_train(3))
+        recs = model.recommend_for_seeds([999999, 888888], k=5)
+        assert recs[0] == model._popularity_rank[0]
+
+    def test_recommend_for_seeds_before_fit_raises(self, tmp_path):
+        model = SentenceBERTRecommender(cache_dir=tmp_path)
+        with pytest.raises(RuntimeError, match="Call .fit"):
+            model.recommend_for_seeds([1000])
+
+
+class TestRecommendForText:
+    """Walk-in pantry-as-seed mode — encode user-supplied text on the fly."""
+
+    def _make_recipes(self, n: int = 20) -> pd.DataFrame:
+        return pd.DataFrame({
+            "id": list(range(1000, 1000 + n)),
+            "name": [f"recipe {i}" for i in range(n)],
+            "ingredients_parsed": [["ing_a", "ing_b"]] * n,
+            "tags_parsed": [["tag1"]] * n,
+        })
+
+    def _make_train(self, n_users: int = 3) -> pd.DataFrame:
+        rows = []
+        for u in range(n_users):
+            for offset in range(3):
+                rows.append({"user_id": u, "recipe_id": 1000 + (u * 3) + offset, "rating": 5})
+        return pd.DataFrame(rows)
+
+    @patch("src.models.sentence_bert.load_recipes")
+    def test_returns_k_ints(self, mock_load, tmp_path):
+        mock_load.return_value = self._make_recipes(20)
+        with patch("sentence_transformers.SentenceTransformer", _fake_encoder_class(dim=8)):
+            model = SentenceBERTRecommender(cache_dir=tmp_path, force_rebuild=True)
+            model.fit(self._make_train(3))
+
+        # Re-patch with a fresh encoder for the on-the-fly text encode at recommend time
+        with patch("sentence_transformers.SentenceTransformer", _fake_encoder_class(dim=8)):
+            recs = model.recommend_for_text(["chicken", "rice", "broccoli"], k=5)
+        assert len(recs) == 5
+        assert all(isinstance(r, int) for r in recs)
+
+    @patch("src.models.sentence_bert.load_recipes")
+    def test_empty_texts_falls_back_to_popularity(self, mock_load, tmp_path):
+        mock_load.return_value = self._make_recipes(20)
+        with patch("sentence_transformers.SentenceTransformer", _fake_encoder_class(dim=8)):
+            model = SentenceBERTRecommender(cache_dir=tmp_path, force_rebuild=True)
+            model.fit(self._make_train(3))
+        # No fresh encoder needed — code path bypasses encode
+        recs = model.recommend_for_text([], k=5)
+        assert recs[0] == model._popularity_rank[0]
+
+    @patch("src.models.sentence_bert.load_recipes")
+    def test_whitespace_only_texts_fall_back(self, mock_load, tmp_path):
+        mock_load.return_value = self._make_recipes(20)
+        with patch("sentence_transformers.SentenceTransformer", _fake_encoder_class(dim=8)):
+            model = SentenceBERTRecommender(cache_dir=tmp_path, force_rebuild=True)
+            model.fit(self._make_train(3))
+        recs = model.recommend_for_text(["   ", ""], k=5)
+        assert recs[0] == model._popularity_rank[0]
+
+
+# ============================================================
 # Integration tests (real catalogue + real encoder)
 # Skipped if data files are missing OR if running fast tests.
 # ============================================================
