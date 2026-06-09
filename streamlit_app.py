@@ -1,0 +1,571 @@
+"""PantryPlate — Streamlit demo widget.
+
+Wraps Stage 1 (SBERT / Popularity routing) and Stage 2 (constraint reranker)
+into an interactive UI. Two modes:
+
+    Persona mode   — pre-built characters with taste_seeds + pantry + macros
+    Walk-in mode   — audience volunteer types pantry + dietary preferences
+
+Both flow through the same Stage 2 reranker. Three α sliders let the user
+explore the (αₜ, αₚ, αₙ) simplex live; the recommendations update on rerun.
+
+Run:
+    uv run streamlit run streamlit_app.py
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import streamlit as st
+
+from src.reranker import Stage2Reranker, filter_by_diet
+
+
+# =============================================================================
+# Page config + theme polish
+# =============================================================================
+
+st.set_page_config(
+    page_title="PantryPlate — recipe recommender",
+    page_icon="🍳",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+
+CUSTOM_CSS = """
+<style>
+/* --- typography --- */
+html, body, [class*="css"] {
+    font-family: 'Georgia', 'Times New Roman', serif;
+}
+h1, h2, h3 { font-family: 'Georgia', serif; font-weight: 700; }
+
+/* --- recipe card --- */
+.recipe-card {
+    background: #ffffff;
+    border-radius: 14px;
+    padding: 22px 26px;
+    margin-bottom: 18px;
+    box-shadow: 0 2px 10px rgba(45, 49, 66, 0.06);
+    border-left: 5px solid #C75D2C;
+}
+.recipe-card.rank-1 { border-left-color: #D4A24C; background: linear-gradient(135deg, #FFFEF8 0%, #FFFAEC 100%); }
+.recipe-card.rank-2 { border-left-color: #B89456; }
+.recipe-card.rank-3 { border-left-color: #A5825A; }
+.recipe-card.diet-fail {
+    background: #F4ECE9;
+    border-left-color: #B85F4A;
+    opacity: 0.7;
+}
+
+.recipe-rank {
+    font-family: 'Georgia', serif;
+    font-size: 1.4em;
+    font-weight: 700;
+    color: #C75D2C;
+    margin-right: 8px;
+}
+.recipe-rank.rank-1 { color: #D4A24C; }
+
+.recipe-title {
+    font-size: 1.25em;
+    font-weight: 700;
+    color: #2D3142;
+    margin-bottom: 6px;
+    text-transform: capitalize;
+}
+
+.recipe-meta {
+    color: #6E6F75;
+    font-size: 0.92em;
+    margin-bottom: 12px;
+    font-style: italic;
+}
+
+/* --- score chips --- */
+.score-row { margin-top: 10px; }
+.score-chip {
+    display: inline-block;
+    padding: 4px 12px;
+    margin: 3px 6px 3px 0;
+    border-radius: 999px;
+    font-size: 0.85em;
+    font-weight: 600;
+    background: #F1ECE0;
+    color: #2D3142;
+}
+.score-chip.taste   { background: #FCE9D9; color: #8C3E1A; }
+.score-chip.pantry  { background: #E4EAD9; color: #4A6034; }
+.score-chip.macros  { background: #DDE9EA; color: #2A4D52; }
+.score-chip.diet-ok { background: #DBE6D2; color: #3C5E26; }
+.score-chip.diet-no { background: #F2D8D2; color: #8B3826; }
+.score-chip.final   { background: #2D3142; color: #FAF8F3; }
+
+/* --- sidebar polish --- */
+[data-testid="stSidebar"] {
+    background: #F1ECE0;
+    border-right: 1px solid #E3DCC8;
+}
+[data-testid="stSidebar"] h2 {
+    color: #C75D2C;
+    border-bottom: 2px solid #C75D2C;
+    padding-bottom: 6px;
+    margin-bottom: 18px;
+}
+
+/* --- alpha summary --- */
+.alpha-summary {
+    background: #ffffff;
+    border-radius: 10px;
+    padding: 12px 16px;
+    margin-top: 10px;
+    text-align: center;
+    font-family: 'Georgia', serif;
+    color: #2D3142;
+    border: 1px dashed #C75D2C;
+}
+
+/* --- header --- */
+.app-header {
+    padding: 8px 0 18px 0;
+    border-bottom: 2px solid #E3DCC8;
+    margin-bottom: 24px;
+}
+.app-header h1 {
+    color: #C75D2C;
+    font-size: 2.4em;
+    margin: 0;
+    letter-spacing: -0.5px;
+}
+.app-header .tagline {
+    color: #6E6F75;
+    font-style: italic;
+    font-size: 1.05em;
+    margin-top: 4px;
+}
+</style>
+"""
+
+st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+
+
+# =============================================================================
+# Cached loaders — load expensive things once per session
+# =============================================================================
+
+@st.cache_resource(show_spinner="🍳 Loading PantryPlate models — first launch takes about 30 seconds...")
+def load_models_and_data():
+    """Load recipes, fit Popularity + SBERT, load personas. Cached for the session."""
+    from src.data.loader import load_recipes, load_train_interactions
+    from src.models.popularity import PopularityRecommender
+    from src.models.sentence_bert import SentenceBERTRecommender
+
+    train = load_train_interactions()
+    recipes_raw = load_recipes()
+    recipes_raw["id"] = recipes_raw["id"].astype(np.int64)
+    recipes = recipes_raw.set_index(recipes_raw["id"].rename("recipe_id"))
+
+    pop = PopularityRecommender().fit(train)
+    sbert = SentenceBERTRecommender(batch_size=256).fit(train)
+
+    personas = {}
+    for p_path in sorted(Path("data/personas").glob("*.json")):
+        with open(p_path) as f:
+            p = json.load(f)
+            personas[p["id"]] = p
+
+    return {
+        "recipes": recipes,
+        "pop": pop,
+        "sbert": sbert,
+        "personas": personas,
+    }
+
+
+@st.cache_resource(show_spinner="Loading text encoder for walk-in mode...")
+def get_text_encoder():
+    """Standalone encoder for walk-in pantry text — cached so we don't re-instantiate per click."""
+    from sentence_transformers import SentenceTransformer
+    return SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+
+
+# =============================================================================
+# Helpers
+# =============================================================================
+
+def normalize_alphas(at: float, ap: float, an: float) -> tuple[float, float, float]:
+    """Normalize three alphas to sum to 1.0. If all zero, default to (1/3, 1/3, 1/3)."""
+    total = at + ap + an
+    if total < 1e-9:
+        return (1 / 3, 1 / 3, 1 / 3)
+    return (at / total, ap / total, an / total)
+
+
+def pantry_pool_for_walkin(sbert, pantry_text: list[str], encoder, k: int) -> tuple[list[int], dict]:
+    """Walk-in candidate pool: encode the pantry text and rank recipes by cosine.
+
+    Bypasses the model's recommend_for_text() so we can reuse a cached encoder
+    instance instead of re-instantiating SentenceTransformer per call.
+    """
+    seeds = [t.strip() for t in pantry_text if t.strip()]
+    if not seeds:
+        ids = sbert._popularity_fallback(user_id=-1, k=k, exclude_seen=False)
+        scores = {rid: 1.0 / (rank + 1) for rank, rid in enumerate(ids)}
+        return ids, scores
+
+    seed_vecs = encoder.encode(seeds, convert_to_numpy=True, normalize_embeddings=True).astype(np.float32)
+    seed_vec = seed_vecs.mean(axis=0)
+    norm = float(np.linalg.norm(seed_vec))
+    if norm == 0:
+        ids = sbert._popularity_fallback(user_id=-1, k=k, exclude_seen=False)
+        scores = {rid: 1.0 / (rank + 1) for rank, rid in enumerate(ids)}
+        return ids, scores
+    seed_vec /= norm
+
+    recipe_dim = sbert._recipe_matrix.shape[1]
+    text_dim = seed_vec.shape[0]
+    if text_dim == recipe_dim:
+        query_vec = seed_vec
+    else:
+        # tag_feature_weight > 0 — zero-pad the tag block
+        padded = np.zeros(recipe_dim, dtype=np.float32)
+        w = sbert.tag_feature_weight
+        padded[:text_dim] = float(np.sqrt(1.0 - w)) * seed_vec
+        n2 = float(np.linalg.norm(padded))
+        query_vec = (padded / n2).astype(np.float32, copy=False)
+
+    raw_scores = sbert._recipe_matrix @ query_vec
+    k_eff = min(k, raw_scores.size)
+    top_unsorted = np.argpartition(-raw_scores, k_eff - 1)[:k_eff]
+    top_sorted = top_unsorted[np.argsort(-raw_scores[top_unsorted])]
+    ids = [int(sbert.recipe_ids[i]) for i in top_sorted]
+    scores = {rid: 1.0 / (rank + 1) for rank, rid in enumerate(ids)}
+    return ids, scores
+
+
+def render_recipe_card(rank: int, recipe_id: int, name: str, scored_row: pd.Series) -> str:
+    """Render a single recipe as a styled HTML card."""
+    rank_class = f"rank-{rank}" if rank <= 3 else ""
+    diet_class = "diet-fail" if scored_row["s_diet"] == 0 else ""
+    card_class = " ".join(c for c in ["recipe-card", rank_class, diet_class] if c)
+
+    diet_chip = (
+        '<span class="score-chip diet-ok">✓ diet OK</span>'
+        if scored_row["s_diet"] == 1
+        else '<span class="score-chip diet-no">✗ diet filter</span>'
+    )
+
+    return f"""
+    <div class="{card_class}">
+        <span class="recipe-rank rank-{rank}">#{rank}</span>
+        <span class="recipe-title">{name}</span>
+        <div class="recipe-meta">recipe id: {recipe_id}</div>
+        <div class="score-row">
+            <span class="score-chip taste">🍴 taste {scored_row['s_taste']:.2f}</span>
+            <span class="score-chip pantry">🥕 pantry {scored_row['s_pantry']:.2f}</span>
+            <span class="score-chip macros">🥗 macros {scored_row['s_nutrition']:.2f}</span>
+            {diet_chip}
+            <span class="score-chip final">final {scored_row['final']:.3f}</span>
+        </div>
+    </div>
+    """
+
+
+# =============================================================================
+# Header
+# =============================================================================
+
+st.markdown(
+    """
+    <div class="app-header">
+        <h1>🍳 PantryPlate</h1>
+        <div class="tagline">Recipe recommendations under your constraints — pantry, macros, dietary needs.</div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+# =============================================================================
+# Load everything (cached)
+# =============================================================================
+
+data = load_models_and_data()
+recipes = data["recipes"]
+pop = data["pop"]
+sbert = data["sbert"]
+personas = data["personas"]
+
+
+# =============================================================================
+# Sidebar — input controls
+# =============================================================================
+
+with st.sidebar:
+    st.markdown("## Who's cooking?")
+
+    mode = st.radio(
+        "Mode",
+        ["Persona", "Walk-in"],
+        index=0,
+        help="**Persona**: choose a pre-built character (with taste_seeds).  \n"
+             "**Walk-in**: type a pantry & preferences live — the demo audience mode.",
+    )
+
+    # Common pantry vocabulary — used as the multiselect options pool.
+    # Personas' own pantry items are unioned in so they always appear as selectable.
+    SUGGESTED_PANTRY = sorted({
+        # proteins
+        "chicken breast", "chicken thigh", "ground beef", "ground turkey",
+        "salmon", "tuna", "shrimp", "bacon", "ham",
+        "tofu", "tempeh", "eggs", "greek yogurt", "cottage cheese",
+        "chickpeas", "black beans", "lentils", "edamame",
+        # grains / starches
+        "rice", "brown rice", "pasta", "quinoa", "couscous", "oats",
+        "potato", "sweet potato", "bread", "tortilla", "noodles",
+        # vegetables
+        "broccoli", "spinach", "kale", "tomato", "carrot", "bell pepper",
+        "onion", "garlic", "mushrooms", "asparagus", "zucchini", "lettuce",
+        "corn", "peas", "celery", "cucumber",
+        # dairy / fats
+        "cheddar", "mozzarella", "parmesan cheese", "cream cheese",
+        "butter", "milk", "yogurt", "olive oil", "coconut milk",
+        # aromatics + condiments
+        "ginger", "lemon", "lime", "soy sauce", "vinegar", "honey",
+        "peanut butter", "ketchup", "mayonnaise", "mustard",
+        # plant-based
+        "oat milk", "almond milk", "nutritional yeast", "tahini",
+        # snacks / fruits
+        "almonds", "walnuts", "banana", "berries", "avocado", "apple",
+    })
+    RESTRICTION_OPTIONS = ["vegetarian", "vegan", "gluten-free", "dairy-free",
+                           "nut-free", "egg-free", "low-carb", "low-fat",
+                           "low-sodium", "kosher"]
+
+    # ----- mode-specific defaults --------------------------------------
+    if mode == "Persona":
+        persona_id = st.selectbox(
+            "Start from persona template",
+            options=list(personas.keys()),
+            format_func=lambda pid: personas[pid].get("label", pid),
+            help="Pick a starting profile. You can edit any field below — the persona's "
+                 "taste seeds drive Stage 1, but everything else is yours to tweak.",
+        )
+        base_persona = personas[persona_id]
+        with st.expander("Why this persona?"):
+            st.write(base_persona.get("description", ""))
+            st.caption(f"Taste seeds: {len(base_persona['taste_seeds'])} recipes — "
+                       f"these define this persona's content profile and are fixed.")
+
+        default_pantry = base_persona["pantry"]
+        default_restrictions = base_persona["restrictions"]
+        default_macros = base_persona["macro_targets"]
+        taste_seeds = base_persona["taste_seeds"]  # hidden from UI; the persona's identity
+    else:
+        st.markdown("_No persona — Stage 1 will use SBERT on your pantry text._")
+        default_pantry = ["chicken breast", "rice", "broccoli", "garlic", "olive oil"]
+        default_restrictions = []
+        default_macros = {"calories": 600}
+        taste_seeds = []  # walk-in has no seeds
+
+    # ----- editable inputs (same controls in both modes) ----------------
+    st.markdown("**🥕 Pantry**")
+    pantry_options = sorted(set(SUGGESTED_PANTRY) | set(default_pantry))
+    active_pantry = st.multiselect(
+        "What's in your kitchen?",
+        options=pantry_options,
+        default=default_pantry,
+        label_visibility="collapsed",
+        help="Multi-select. Add or remove items — the persona's defaults are pre-loaded.",
+    )
+
+    st.markdown("**🚫 Dietary restrictions**")
+    active_restrictions = st.multiselect(
+        "Any restrictions?",
+        options=RESTRICTION_OPTIONS,
+        default=default_restrictions,
+        label_visibility="collapsed",
+        help="Diet is a hard filter — recipes failing ANY restriction score 0.",
+    )
+
+    st.markdown("**🥗 Macro targets (optional)**")
+    use_macros = st.checkbox(
+        "Apply macro targets",
+        value=bool(default_macros),
+        help="Uncheck to ignore macros entirely (αₙ will have no effect).",
+    )
+    active_macros: dict = {}
+    if use_macros:
+        c1, c2 = st.columns(2)
+        with c1:
+            cals = st.number_input("Calories",   0, 2000, int(default_macros.get("calories", 500)), 50)
+            prot = st.number_input("Protein PDV", 0, 200, int(default_macros.get("protein_pdv", 30)), 5)
+        with c2:
+            carb = st.number_input("Carbs PDV",   0, 200, int(default_macros.get("carbs_pdv", 30)), 5)
+            fat  = st.number_input("Fat PDV",     0, 200, int(default_macros.get("fat_pdv", 25)), 5)
+        if cals > 0: active_macros["calories"]    = cals
+        if prot > 0: active_macros["protein_pdv"] = prot
+        if carb > 0: active_macros["carbs_pdv"]   = carb
+        if fat  > 0: active_macros["fat_pdv"]     = fat
+
+    # ----- assemble the active persona used for Stage 2 -----------------
+    if mode == "Persona":
+        active_persona = {
+            "id": base_persona["id"],
+            "label": base_persona.get("label", base_persona["id"]),
+            "pantry": active_pantry,
+            "macro_targets": active_macros,
+            "restrictions": active_restrictions,
+            "exclude_from_staples": base_persona.get("exclude_from_staples", []),
+            "taste_seeds": taste_seeds,
+        }
+    else:
+        active_persona = {
+            "id": "walkin_demo",
+            "label": "Walk-in volunteer",
+            "pantry": active_pantry,
+            "macro_targets": active_macros,
+            "restrictions": active_restrictions,
+            "exclude_from_staples": [],
+            "taste_seeds": [],
+        }
+
+    st.markdown("---")
+    st.markdown("## What matters to you?")
+    st.caption("The α weights below blend taste, pantry, and nutrition. They're normalized to sum to 1.")
+
+    alpha_taste_raw = st.slider("🍴 Taste", 0.0, 1.0, 0.50, 0.05,
+                                 help="How much to favor Stage 1's content-based ranking.")
+    alpha_pantry_raw = st.slider("🥕 Pantry match", 0.0, 1.0, 0.30, 0.05,
+                                 help="How much to favor recipes you can mostly cook from your pantry.")
+    alpha_nutrition_raw = st.slider("🥗 Macros", 0.0, 1.0, 0.20, 0.05,
+                                    help="How much to favor recipes near your macro targets.")
+    alpha_taste, alpha_pantry, alpha_nutrition = normalize_alphas(
+        alpha_taste_raw, alpha_pantry_raw, alpha_nutrition_raw
+    )
+    st.markdown(
+        f"""
+        <div class='alpha-summary'>
+            normalized<br>
+            🍴 {alpha_taste:.2f} &nbsp; 🥕 {alpha_pantry:.2f} &nbsp; 🥗 {alpha_nutrition:.2f}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("---")
+    k_show = st.number_input("How many recipes to show?", min_value=3, max_value=20, value=10, step=1)
+
+
+# =============================================================================
+# Main panel — generate + display recommendations
+# =============================================================================
+
+POOL_SIZE = 100
+# Overgenerate factor: with dietary restrictions, Stage 1 may return mostly
+# non-compliant candidates (e.g., chicken-heavy pantry + vegan filter). Get
+# 5x and post-filter by diet so the reranker has compliant candidates to
+# work with. Standard "expand-then-filter" candidate-generation pattern.
+OVERGEN_FACTOR = 5
+INITIAL_POOL = POOL_SIZE * OVERGEN_FACTOR if active_persona["restrictions"] else POOL_SIZE
+
+# Stage 1 — route to the right model for this mode
+if mode == "Persona":
+    initial_ids = sbert.recommend_for_seeds(active_persona["taste_seeds"], k=INITIAL_POOL)
+    stage1_label = "SBERT(taste_seeds)"
+else:
+    if not active_persona["pantry"]:
+        initial_ids = pop.recommend(user_id=-1, k=INITIAL_POOL, exclude_seen=False)
+        stage1_label = "Popularity (no pantry provided)"
+    else:
+        encoder = get_text_encoder()
+        initial_ids, _ = pantry_pool_for_walkin(
+            sbert, active_persona["pantry"], encoder, INITIAL_POOL
+        )
+        stage1_label = "SBERT(pantry text)"
+
+# Diet pre-filter — keeps Stage 1's order but drops non-compliant candidates
+candidate_ids = filter_by_diet(
+    initial_ids,
+    active_persona["restrictions"],
+    recipes,
+    target_k=POOL_SIZE,
+)
+taste_scores = {rid: 1.0 / (rank + 1) for rank, rid in enumerate(candidate_ids)}
+
+# Surface what happened during filtering — helps the audience understand
+# why "vegan + chicken pantry" might show fewer recipes than expected
+n_initial = len(initial_ids)
+n_compliant = len(candidate_ids)
+if active_persona["restrictions"] and n_compliant < POOL_SIZE:
+    st.info(
+        f"🍃 Diet filter applied. Looked at {n_initial} Stage 1 candidates; "
+        f"{n_compliant} satisfy "
+        f"{', '.join(active_persona['restrictions'])}. "
+        f"{'Try widening your pantry or relaxing the diet filter for more variety.' if n_compliant < 10 else ''}"
+    )
+
+# Stage 2 — rerank with the current alphas
+reranker = Stage2Reranker(
+    alpha_taste=alpha_taste,
+    alpha_pantry=alpha_pantry,
+    alpha_nutrition=alpha_nutrition,
+)
+scored = reranker.rerank(active_persona, candidate_ids, taste_scores, recipes, k=k_show, return_scores=True)
+
+# Layout: results on the left, "what's happening" on the right
+col_main, col_side = st.columns([3, 1], gap="large")
+
+with col_main:
+    st.markdown(f"### Your top {k_show} recipes")
+    st.caption(f"Stage 1 candidates from **{stage1_label}** · Stage 2 reranked with the α-weights")
+
+    if scored.empty:
+        st.warning("No candidates to show. Try a different mode or input.")
+    else:
+        for i, row in scored.iterrows():
+            name = recipes.loc[row["recipe_id"], "name"] if row["recipe_id"] in recipes.index else "(unknown)"
+            st.markdown(render_recipe_card(rank=i + 1, recipe_id=int(row["recipe_id"]),
+                                           name=name, scored_row=row),
+                        unsafe_allow_html=True)
+
+with col_side:
+    st.markdown("### What's happening?")
+    st.markdown(
+        f"""
+        **Stage 1** → 100 candidates
+        Method: `{stage1_label}`
+
+        **Stage 2** → top-{k_show}
+        Formula:
+        `final = s_diet × (αₜ·s_taste + αₚ·s_pantry + αₙ·s_nutrition)`
+        """
+    )
+
+    if not scored.empty:
+        st.markdown("### Score statistics")
+        st.metric("Mean s_taste",     f"{scored['s_taste'].mean():.2f}")
+        st.metric("Mean s_pantry",    f"{scored['s_pantry'].mean():.2f}")
+        st.metric("Mean s_nutrition", f"{scored['s_nutrition'].mean():.2f}")
+        st.metric("Diet pass rate",   f"{(scored['s_diet'] == 1).mean():.0%}")
+
+    with st.expander("ℹ️ About PantryPlate"):
+        st.markdown(
+            """
+            **Stage 1** generates candidate recipes — content-similar to a user's seeds
+            (persona mode) or pantry text (walk-in mode), or popular baseline if no input.
+
+            **Stage 2** reranks those candidates by your weighted constraints. Diet is a
+            **hard filter** (0 or 1); pantry, nutrition, and taste are **continuous** signals
+            on the simplex.
+
+            **The α sliders** are the *X-factor* — they let you explore the trade-off
+            between taste, pantry feasibility, and macro fit. Watch the top-10 reorder
+            as you change them.
+            """
+        )

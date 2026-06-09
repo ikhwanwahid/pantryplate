@@ -1,20 +1,29 @@
-"""Stage 2 reranker — combines Stage 1 taste scores with constraint scores.
+"""Stage 2 reranker — soft-constraint ranking of Stage-1-eligible candidates.
 
-Formula (from the proposal deck, Slide on the Stage 2 reranker):
+Formula:
 
-    final(u, r) = s_diet × (αₜ·s_taste + αₚ·s_pantry + αₙ·s_nutrition)
+    final(u, r) = αₜ·s_taste(u,r) + αₚ·s_pantry(u,r) + αₙ·s_nutrition(u,r)
+
+    αₜ + αₚ + αₙ = 1   (the simplex constraint — the deck's X-factor)
 
 Where:
     s_taste     — predicted relevance from Stage 1, normalized to [0, 1]
     s_pantry    — non-staple ingredient overlap with user's pantry, [0, 1]
     s_nutrition — Gaussian proximity to user's macro targets, [0, 1]
-    s_diet      — hard filter, {0, 1} — 0 collapses the whole score
-
-    αₜ + αₚ + αₙ = 1   (the simplex constraint — the deck's X-factor)
 
 The (αₜ, αₚ, αₙ) triplet is what gets swept in the headline experiment
 to characterize the trade-off between taste, pantry feasibility, and
 nutritional match.
+
+**Note on diet** (architectural decision §8): diet is a HARD constraint
+applied at Stage 1's exit via `filter_by_diet`, NOT a multiplicative term
+in the Stage 2 formula. Stage 2 assumes its input candidates are already
+diet-compliant. We still COMPUTE s_diet per recipe for visibility (a "✓ diet OK"
+badge in the demo), but it does not affect the final score.
+
+If a non-compliant recipe somehow reaches Stage 2 (e.g., caller skipped
+the filter), it will still be scored and ranked normally — Stage 2 trusts
+its input. Defense-in-depth lives at the caller layer, not here.
 
 Convention:
     .rerank(persona, candidates, taste_scores, recipes_df, k=10)
@@ -145,12 +154,16 @@ class Stage2Reranker:
         s_nutrition = np.array(s_nutrition_arr, dtype=np.float64)
         s_diet = np.array(s_diet_arr, dtype=np.int64)
 
-        combined = (
+        # final = αₜ·s_taste + αₚ·s_pantry + αₙ·s_nutrition
+        # Diet is NOT multiplicative here — it's a Stage 1 filter (see module
+        # docstring + docs/data_decisions.md §8). s_diet is still reported per
+        # recipe for visibility in the demo (the "✓ diet OK" badge) but does
+        # not affect the score.
+        final = (
             self.alpha_taste * s_taste_arr
             + self.alpha_pantry * s_pantry
             + self.alpha_nutrition * s_nutrition
         )
-        final = s_diet * combined
 
         return pd.DataFrame({
             "recipe_id":   cand_list,

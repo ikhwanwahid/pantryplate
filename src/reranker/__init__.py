@@ -27,9 +27,11 @@ from src.reranker.scores import (
     pantry_score,
 )
 from src.reranker.combiner import Stage2Reranker
+from src.reranker.filtering import filter_by_diet
 
 __all__ = [
     "Stage2Reranker",
+    "filter_by_diet",
     "STAPLES",
     "INGREDIENT_BLOCKLIST",
     "TAG_FOR_RESTRICTION",

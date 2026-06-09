@@ -175,20 +175,31 @@ class TestRerank:
         # Expected order by raw taste: 100, 101, 104, 102, 103
         assert top == [100, 101, 104, 102, 103]
 
-    def test_diet_filter_pushes_to_bottom(self):
-        """Vegan persona: chicken recipe (101) should never rank above vegan recipes
-        (because s_diet=0 → final=0)."""
+    def test_stage2_does_not_filter_by_diet(self):
+        """Stage 2 trusts that its input is already diet-compliant (filter_by_diet
+        runs at Stage 1's exit). If a non-compliant recipe slips through, Stage 2
+        still ranks it normally — it does NOT zero out s_diet violators."""
         recipes = _make_recipes()
         r = Stage2Reranker(alpha_taste=1.0, alpha_pantry=0.0, alpha_nutrition=0.0)
-        # 101 (chicken) has highest raw taste; but diet should zero its final.
-        # Give 100 and 102 distinct taste values so we can verify the diet filter
-        # without running into ties.
+        # 101 (chicken) has highest raw taste. Under the new architecture, since
+        # Stage 2 doesn't multiply by s_diet, the chicken recipe should rank #1
+        # despite being non-vegan. Diet enforcement is the caller's job.
         taste = {100: 0.5, 101: 1.0, 102: 0.7}
         top = r.rerank(_vegan_persona(), [100, 101, 102], taste, recipes, k=3)
-        # 100 and 102 are vegan-compliant; 101 is not. After diet × s_taste, 101's
-        # final is 0 and the two vegan recipes have positive scores.
-        assert top.index(101) > top.index(100)
-        assert top.index(101) > top.index(102)
+        assert top[0] == 101, (
+            "Stage 2 should rank by final = αₜ·s_taste + αₚ·s_pantry + αₙ·s_nutrition "
+            "without multiplying by s_diet. Filtering is Stage 1's job."
+        )
+
+    def test_s_diet_column_still_computed(self):
+        """For visibility (demo badge), Stage 2 still reports s_diet per candidate
+        even though it doesn't affect the score."""
+        recipes = _make_recipes()
+        r = Stage2Reranker()
+        scored = r.score_candidates(_vegan_persona(), [100, 101], {100: 1, 101: 1}, recipes)
+        diet_by_id = dict(zip(scored["recipe_id"], scored["s_diet"]))
+        assert diet_by_id[100] == 1  # vegan recipe
+        assert diet_by_id[101] == 0  # chicken recipe — flagged but not penalized in final
 
     def test_return_scores_includes_full_dataframe(self):
         recipes = _make_recipes()

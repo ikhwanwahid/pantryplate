@@ -40,7 +40,7 @@ These have been decided with evidence and documented in `docs/data_decisions.md`
 4. **Positive rating threshold = 4 stars** for LOO holdout logic.
 5. **Stage 1 model menu is set**: Popularity, MF, EASE, BPR, Tag SVD content, Sentence-BERT, hybrid, two-tower (+ SASRec stretch). Don't propose adding/swapping models unless coordinated.
 6. **Pantry score uses non-staple overlap**; Useful Recall uses `missing_count ≤ 3`. Both live in `src/utils/staples.py`.
-7. **Diet is a hard filter** in Stage 2 (others are continuous ranking).
+7. **Diet is a hard filter applied at Stage 1's exit** via `filter_by_diet` in `src/reranker/filtering.py`. Stage 2's formula is `αₜ·s_taste + αₚ·s_pantry + αₙ·s_nutrition` (no `s_diet ×`). Stage 2 still reports `s_diet` per candidate for visibility, but doesn't use it in scoring. See decision §8 in `docs/data_decisions.md`.
 8. **Nutrition clipping** at (5000 kcal, 1000% PDV) — already in the loader.
 9. **Personas**: 25-35 user-specific items per pantry; staples are project-wide via `src/utils/staples.py`. 3 personas already exist in `data/personas/`.
 10. **Eval harness is the only sanctioned evaluation path**. Don't reimplement Recall@K or run your own loops over users.
