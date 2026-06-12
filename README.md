@@ -18,6 +18,13 @@ PantryPlate is a two-stage recommender:
                       USER CONTEXT
        (rating history · pantry · macros · diet · α-weights)
                             │
+                   ┌────────┴────────┐
+                   │  OPTIONAL INPUT │
+              📷 Fridge photo        │
+              → Gemini Vision        │
+              → detected ingredients │
+                   └────────┬────────┘
+                            │
                             ▼
           STAGE 1 · CANDIDATE GENERATION (real recsys)
        MF · EASE · BPR · Sentence-BERT · hybrid · two-tower
@@ -60,6 +67,9 @@ For the full pitch, read [`PantryPlate_Proposal.pdf`](PantryPlate_Proposal.pdf) 
 │   └── week1_walkthrough.ipynb       # Runnable code tour
 │
 ├── src/
+│   ├── vision/                       # CV inference pipeline
+│   │   ├── cv_inference.py           # Gemini Vision ingredient detection from fridge images
+│   │   └── ingredient_normalizer.py  # Maps CV labels → Food.com ingredient vocabulary
 │   ├── data/                         # Loaders, ingredient/nutrition parsing
 │   │   ├── loader.py                 # Pre-split train/val/test loaders
 │   │   ├── ingredients.py            # Nutrition + ingredient normalization
@@ -101,7 +111,17 @@ uv sync
 
 This sets up a `.venv/` and installs everything from `uv.lock`. ~5 minutes including PyTorch download.
 
-### 2. Download the Food.com dataset
+### 2. Set up environment variables
+
+Create a `.env` file in the project root:
+
+```
+GEMINI_API_KEY=your_key_here
+```
+
+Get a free Gemini API key at **aistudio.google.com** — no credit card required, 1,500 requests/day free, no expiration.
+
+### 3. Download the Food.com dataset
 
 This dataset is too large to ship in git (~1.5 GB). Download it from [Kaggle](https://www.kaggle.com/datasets/shuyangli94/food-com-recipes-and-user-interactions):
 
@@ -127,7 +147,7 @@ data/raw/
 └── ingr_map.pkl                 (~900 KB)
 ```
 
-### 3. Verify the setup
+### 4. Verify the setup
 
 Run the test suite:
 
@@ -146,6 +166,25 @@ uv run python smoke_test.py
 ```
 
 If both pass, your environment is set up correctly.
+
+---
+
+## CV Inference (fridge image → ingredients)
+
+PantryPlate supports ingredient detection from fridge photos via Google Gemini Vision. A photo of your fridge is sent to Gemini 2.5 Flash, which returns a list of detected ingredients that feed directly into the Stage 2 reranker as the user's pantry.
+
+```
+📷 Fridge photo → Gemini 2.5 Flash → ["eggs", "milk", "carrots"] → Stage 2 reranker
+```
+
+To test it, place a fridge image at `data/test_fridge.jpg` and run:
+
+```bash
+uv run pytest tests/test_cv.py -s
+# Expected: Detected ingredients: ['eggs', 'milk', 'carrots', ...]
+```
+
+The detected ingredient labels are normalized to match Food.com vocabulary via `src/vision/ingredient_normalizer.py` before being passed to the reranker.
 
 ---
 
@@ -218,6 +257,9 @@ uv run pytest tests/ -q
 # Specific module
 uv run pytest tests/test_harness.py -v
 
+# CV inference test
+uv run pytest tests/test_cv.py -s
+
 # Quick subset (skipping integration tests that need real data)
 uv run pytest tests/ -q -k "not integration"
 ```
@@ -255,7 +297,7 @@ Both notebooks are pre-executed with outputs included — you can read them with
 | Week | Dates | Focus | Status |
 |---|---|---|---|
 | 4 | **Jun 3–9** | Eval harness ✅ + onboarding docs ✅ + 3 personas ✅ + Stage 1 models start | 🟡 Active |
-| 5 | Jun 10–16 | Stage 2 reranker + α-sweep + per-persona analysis | Pending |
+| 5 | Jun 10–16 | Stage 2 reranker + α-sweep + per-persona analysis + CV inference ✅ | 🟡 Active |
 | 6 | Jun 17–23 | Demo widget + slide polish + physical prop + dress rehearsal | Pending |
 | — | **Jun 24** | **Final presentation** | — |
 
@@ -273,6 +315,7 @@ The compressed Week-4-6 execution requires sharp scoping. See `docs/week2_onboar
 - 8,023 canonical ingredients via `ingr_map.pkl`
 
 The training cohort is 24,961 active users (≥5 ratings each).
+
 
 ---
 
