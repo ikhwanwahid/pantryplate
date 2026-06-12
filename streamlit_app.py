@@ -106,6 +106,10 @@ h1, h2, h3 { font-family: 'Georgia', serif; font-weight: 700; }
 .score-chip.diet-no { background: #F2D8D2; color: #8B3826; }
 .score-chip.final   { background: #2D3142; color: #FAF8F3; }
 
+/* novelty: highlights cold/novel items SBERT surfaces (vs popularity defaults) */
+.score-chip.novelty-novel   { background: #E4EFD9; color: #3C5E26; border: 1px dashed #7A9A6E; }
+.score-chip.novelty-popular { background: #F1ECE0; color: #6E6F75; }
+
 /* --- sidebar polish --- */
 [data-testid="stSidebar"] {
     background: #F1ECE0;
@@ -179,11 +183,17 @@ def load_models_and_data():
             p = json.load(f)
             personas[p["id"]] = p
 
+    # Per-recipe unique-rater count — drives the novelty badge / filter.
+    # A recipe with 0 raters in train is what the leaderboard calls a "cold item":
+    # exactly the case SBERT's cold-track training was meant to serve.
+    rater_counts = train.groupby("recipe_id")["user_id"].nunique().to_dict()
+
     return {
         "recipes": recipes,
         "pop": pop,
         "sbert": sbert,
         "personas": personas,
+        "rater_counts": rater_counts,
     }
 
 
@@ -297,6 +307,9 @@ def render_recipe_card(rank: int, recipe_id: int, name: str, scored_row: pd.Seri
         else '<span class="score-chip diet-no">✗ diet filter</span>'
     )
 
+    novelty_cls, novelty_label = novelty_for(recipe_id)
+    novelty_chip = f'<span class="score-chip {novelty_cls}">{novelty_label}</span>'
+
     return f"""
     <div class="{card_class}">
         <span class="recipe-rank rank-{rank}">#{rank}</span>
@@ -307,6 +320,7 @@ def render_recipe_card(rank: int, recipe_id: int, name: str, scored_row: pd.Seri
             <span class="score-chip pantry">🥕 pantry {scored_row['s_pantry']:.2f}</span>
             <span class="score-chip macros">🥗 macros {scored_row['s_nutrition']:.2f}</span>
             {diet_chip}
+            {novelty_chip}
             <span class="score-chip final">final {scored_row['final']:.3f}</span>
         </div>
     </div>
@@ -337,6 +351,28 @@ recipes = data["recipes"]
 pop = data["pop"]
 sbert = data["sbert"]
 personas = data["personas"]
+rater_counts = data["rater_counts"]
+
+# Threshold for the novelty badge — "novel" = has < this many raters in train.
+# 10 is a nice midpoint: every cold (zero-rater) recipe plus emerging ones with
+# small followings get badged. The leaderboard's "cold track" uses zero-rater
+# strictly; we relax slightly here so the badge marks more candidates.
+NOVELTY_THRESHOLD = 10
+
+
+def novelty_for(recipe_id: int) -> tuple[str, str]:
+    """Return (css_class, label) for a recipe's novelty badge.
+
+    Returns one of:
+        ("novelty-novel",   "🌱 novel  (Nr raters)")
+        ("novelty-popular", "📈 popular (Nr raters)")
+    """
+    n = int(rater_counts.get(int(recipe_id), 0))
+    if n < NOVELTY_THRESHOLD:
+        if n == 0:
+            return ("novelty-novel", "🌱 cold item · 0 raters")
+        return ("novelty-novel", f"🌱 novel · {n} rater{'s' if n != 1 else ''}")
+    return ("novelty-popular", f"📈 popular · {n:,} raters")
 
 
 # =============================================================================
@@ -547,6 +583,16 @@ with st.sidebar:
     if pc4.button("🥗 Macros",     use_container_width=True): _set_alpha(0.00, 0.00, 1.00)
 
     st.markdown("---")
+    st.markdown("## Discovery options")
+    only_novel = st.toggle(
+        "🌱 Surface novel recipes only",
+        value=False,
+        help=f"Filter the candidate pool to recipes with fewer than {NOVELTY_THRESHOLD} "
+             "raters in the training data. These are 'cold items' — the use case the "
+             "content model (SBERT) was specifically designed to handle. Off by default.",
+    )
+
+    st.markdown("---")
     k_show = st.number_input("How many recipes to show?", min_value=3, max_value=20, value=10, step=1)
 
 
@@ -582,8 +628,19 @@ candidate_ids = filter_by_diet(
     initial_ids,
     active_persona["restrictions"],
     recipes,
-    target_k=POOL_SIZE,
+    target_k=POOL_SIZE if not only_novel else POOL_SIZE * 4,
 )
+
+# Optional novelty filter — keep only candidates with < NOVELTY_THRESHOLD raters
+# in train. This is what SBERT's cold-track training was for: surfacing recipes
+# nobody has rated yet. Off by default; on for the "show me discoveries" demo path.
+n_pre_novelty = len(candidate_ids)
+if only_novel:
+    candidate_ids = [
+        rid for rid in candidate_ids
+        if int(rater_counts.get(int(rid), 0)) < NOVELTY_THRESHOLD
+    ][:POOL_SIZE]
+
 taste_scores = {rid: 1.0 / (rank + 1) for rank, rid in enumerate(candidate_ids)}
 
 # Surface what happened during filtering — helps the audience understand
@@ -596,6 +653,15 @@ if active_persona["restrictions"] and n_compliant < POOL_SIZE:
         f"{n_compliant} satisfy "
         f"{', '.join(active_persona['restrictions'])}. "
         f"{'Try widening your pantry or relaxing the diet filter for more variety.' if n_compliant < 10 else ''}"
+    )
+
+if only_novel:
+    n_after_novelty = len(candidate_ids)
+    st.info(
+        f"🌱 Novelty filter applied. {n_after_novelty}/{n_pre_novelty} candidates "
+        f"have fewer than {NOVELTY_THRESHOLD} raters in train — these are the "
+        f"recipes content models (SBERT) were specifically trained to surface."
+        f"{' Try toggling off to compare with the full pool.' if n_after_novelty < 10 else ''}"
     )
 
 # Stage 2 — rerank with the current alphas
