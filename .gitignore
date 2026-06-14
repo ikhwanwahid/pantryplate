@@ -4,6 +4,7 @@ data/processed/*.db
 data/processed/*.parquet
 data/processed/*.pkl
 data/processed/*.npy
+data/_tmp_fridge*          # transient upload from the Streamlit CV demo
 
 # Python
 __pycache__/
