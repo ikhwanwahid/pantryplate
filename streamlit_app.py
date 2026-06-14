@@ -122,18 +122,6 @@ h1, h2, h3 { font-family: 'Georgia', serif; font-weight: 700; }
     margin-bottom: 18px;
 }
 
-/* --- alpha summary --- */
-.alpha-summary {
-    background: #ffffff;
-    border-radius: 10px;
-    padding: 12px 16px;
-    margin-top: 10px;
-    text-align: center;
-    font-family: 'Georgia', serif;
-    color: #2D3142;
-    border: 1px dashed #C75D2C;
-}
-
 /* --- header --- */
 .app-header {
     padding: 8px 0 18px 0;
@@ -622,29 +610,6 @@ with st.sidebar:
     alpha_taste     = float(st.session_state["alpha_taste"])
     alpha_pantry    = float(st.session_state["alpha_pantry"])
     alpha_nutrition = float(st.session_state["alpha_nutrition"])
-
-    # Sanity / display — values now always sum to ~1
-    total_show = alpha_taste + alpha_pantry + alpha_nutrition
-    st.markdown(
-        f"""
-        <div class='alpha-summary'>
-            current mix (sum = {total_show:.2f})<br>
-            🍴 {alpha_taste:.2f} &nbsp; 🥕 {alpha_pantry:.2f} &nbsp; 🥗 {alpha_nutrition:.2f}
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    # Quick presets for live demo — one click jumps to a simplex corner
-    pc1, pc2, pc3, pc4 = st.columns(4)
-    def _set_alpha(t: float, p: float, n: float) -> None:
-        st.session_state["alpha_taste"]     = t
-        st.session_state["alpha_pantry"]    = p
-        st.session_state["alpha_nutrition"] = n
-    if pc1.button("⚖️ Balanced",  use_container_width=True): _set_alpha(0.50, 0.30, 0.20)
-    if pc2.button("🍴 Taste",      use_container_width=True): _set_alpha(1.00, 0.00, 0.00)
-    if pc3.button("🥕 Pantry",     use_container_width=True): _set_alpha(0.00, 1.00, 0.00)
-    if pc4.button("🥗 Macros",     use_container_width=True): _set_alpha(0.00, 0.00, 1.00)
 
     st.markdown("---")
     st.markdown("## Discovery options")
