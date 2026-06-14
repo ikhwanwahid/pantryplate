@@ -179,12 +179,36 @@ class SentenceBERTRecommender:
     # ---------------------------------------------------------------------
     # fit
     # ---------------------------------------------------------------------
-    def fit(self, train_df: pd.DataFrame) -> "SentenceBERTRecommender":
+    def fit(
+        self,
+        train_df: pd.DataFrame,
+        recipes_df: pd.DataFrame | None = None,
+    ) -> "SentenceBERTRecommender":
+        """Fit the recommender.
+
+        Parameters
+        ----------
+        train_df : pd.DataFrame
+            Interactions with user_id / recipe_id / rating columns.
+        recipes_df : pd.DataFrame, optional
+            Pre-loaded recipe catalogue (from `load_recipes()`). Pass this to
+            avoid re-parsing the 230K-row CSV when the caller already has it
+            in memory (e.g. the Streamlit app) — roughly halves cold start.
+            Must contain an "id" column. If None, recipes are loaded internally.
+            Only used when the embedding cache needs (re)building or for the
+            recipe-id index; the cached embedding matrix path is unchanged.
+        """
         if not {"user_id", "recipe_id", "rating"}.issubset(train_df.columns):
             raise ValueError("train_df must have 'user_id', 'recipe_id', 'rating' columns")
 
         # 1. Build / load recipe embeddings for the FULL catalogue (cold-track requires this)
-        recipes = load_recipes()
+        recipes = load_recipes() if recipes_df is None else recipes_df.copy()
+        if "id" not in recipes.columns:
+            # Allow a recipe_id-indexed frame (what the Streamlit app holds)
+            if recipes.index.name in ("id", "recipe_id"):
+                recipes = recipes.reset_index().rename(columns={"recipe_id": "id"})
+            else:
+                raise ValueError("recipes_df must have an 'id' column or be indexed by recipe id")
         recipes["id"] = recipes["id"].astype(np.int64)
         self.recipe_ids = recipes["id"].to_numpy(copy=False)
         self._recipe_id_to_row = {int(rid): i for i, rid in enumerate(self.recipe_ids)}

@@ -175,7 +175,9 @@ def load_models_and_data():
     recipes = recipes_raw.set_index(recipes_raw["id"].rename("recipe_id"))
 
     pop = PopularityRecommender().fit(train)
-    sbert = SentenceBERTRecommender(batch_size=256).fit(train)
+    # Pass the already-parsed catalogue so fit() doesn't re-parse the 230K-row
+    # recipe CSV a second time — roughly halves cold start.
+    sbert = SentenceBERTRecommender(batch_size=256).fit(train, recipes_df=recipes_raw)
 
     personas = {}
     for p_path in sorted(Path("data/personas").glob("*.json")):
