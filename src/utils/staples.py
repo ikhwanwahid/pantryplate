@@ -115,6 +115,46 @@ def pantry_score(
         return 1.0
     return len(non_staple & pantry) / len(non_staple)
 
+def pantry_score_with_expiry(
+    recipe_ingredients: Iterable[str],
+    user_pantry: Iterable[str],
+    pantry_expiry: Optional[dict] = None,
+    staples: frozenset[str] = STAPLES,
+) -> float:
+    """Like pantry_score, but boosts the score if matched pantry items are
+    close to expiry.
+
+    boosted = base_score * (1 + 0.5 * avg_urgency)
+
+    where avg_urgency is the average urgency_score() across matched
+    non-staple ingredients that have an entry in pantry_expiry. If
+    pantry_expiry is empty/None, behaves exactly like pantry_score.
+    """
+    base = pantry_score(recipe_ingredients, user_pantry, staples)
+
+    if not pantry_expiry:
+        return base
+
+    from src.vision.expiry_model import urgency_score
+
+    recipe = set(recipe_ingredients) if not isinstance(recipe_ingredients, set) else recipe_ingredients
+    pantry = set(user_pantry) if not isinstance(user_pantry, set) else user_pantry
+    non_staple = recipe - staples
+    matched = non_staple & pantry
+
+    urgencies = []
+    for ing in matched:
+        for item, expiry in pantry_expiry.items():
+            if item.lower() in ing.lower() or ing.lower() in item.lower():
+                urgencies.append(urgency_score(expiry))
+
+    if not urgencies:
+        return base
+
+    avg_urgency = sum(urgencies) / len(urgencies)
+    boosted = base * (1 + 0.5 * avg_urgency)
+    return min(boosted, 1.0)
+
 
 def missing_count(
     recipe_ingredients: Iterable[str],

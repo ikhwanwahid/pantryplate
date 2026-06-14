@@ -23,6 +23,9 @@ import pandas as pd
 import streamlit as st
 
 from src.reranker import Stage2Reranker, filter_by_diet
+from src.vision.cv_inference import detect_ingredients_from_image
+from src.vision.ingredient_normalizer import normalize
+from src.vision.expiry_model import assign_expiry_dates
 
 
 # =============================================================================
@@ -192,6 +195,18 @@ def get_text_encoder():
     """Standalone encoder for walk-in pantry text — cached so we don't re-instantiate per click."""
     from sentence_transformers import SentenceTransformer
     return SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+
+@st.cache_data(show_spinner="🔍 Detecting ingredients...")
+def cached_detect_ingredients(image_bytes: bytes) -> list[str]:
+    """Detect ingredients from a fridge photo via Gemini Vision. Cached by image bytes."""
+    from src.vision.cv_inference import detect_ingredients_from_image
+    from src.vision.ingredient_normalizer import normalize
+
+    with open("temp_fridge.jpg", "wb") as f:
+        f.write(image_bytes)
+
+    raw_labels = detect_ingredients_from_image("temp_fridge.jpg")
+    return normalize(raw_labels)
 
 
 # =============================================================================
@@ -409,14 +424,65 @@ with st.sidebar:
         default_restrictions = []
         default_macros = {"calories": 600}
         taste_seeds = []  # walk-in has no seeds
+        
+    # ----- CV: fridge photo upload (optional pantry input) --------------
+    st.markdown("**📷 Scan your fridge(fast and easy)**")
+    fridge_photo = st.file_uploader(
+        "Upload a fridge photo",
+        type=["jpg", "jpeg", "png"],
+        label_visibility="collapsed",
+        help="Detected ingredients will be added to your pantry below.",
+    )
+
+    detected_ingredients: list[str] = []
+    if fridge_photo is not None:
+        from src.vision.cv_inference import detect_ingredients_from_image
+        from src.vision.ingredient_normalizer import normalize
+
+        with open("temp_fridge.jpg", "wb") as f:
+            f.write(fridge_photo.read())
+
+        with st.spinner("🔍 Detecting ingredients..."):
+            raw_labels = detect_ingredients_from_image("temp_fridge.jpg")
+            detected_ingredients = normalize(raw_labels)
+
+        if detected_ingredients:
+            st.success(f"Detected: {', '.join(detected_ingredients)}")
+            if st.button("➕ Add detected ingredients to pantry"):
+                current = set(st.session_state.get("active_pantry", default_pantry))
+                st.session_state["active_pantry"] = sorted(current | set(detected_ingredients))
+
+                new_expiry = assign_expiry_dates(detected_ingredients)
+                expiry_dict = st.session_state.get("pantry_expiry", {})
+                expiry_dict.update(new_expiry)
+                st.session_state["pantry_expiry"] = expiry_dict
+        else:
+            st.warning("No ingredients detected — try a clearer photo.")
 
     # ----- editable inputs (same controls in both modes) ----------------
     st.markdown("**🥕 Pantry**")
-    pantry_options = sorted(set(SUGGESTED_PANTRY) | set(default_pantry))
+
+    if "active_pantry" not in st.session_state:
+        st.session_state["active_pantry"] = default_pantry
+
+    pantry_options = sorted(
+        set(SUGGESTED_PANTRY)
+        | set(default_pantry)
+        | set(detected_ingredients)
+        | set(st.session_state["active_pantry"])
+    )
+
+    prioritize_expiring = st.checkbox(
+    "⏰ Prioritize ingredients about to expire",
+    value=False,
+    help="Boosts recipes that use ingredients detected from your fridge photo "
+         "that are close to their (estimated) expiry date.",
+)
+
     active_pantry = st.multiselect(
         "What's in your kitchen?",
         options=pantry_options,
-        default=default_pantry,
+        key="active_pantry",
         label_visibility="collapsed",
         help="Multi-select. Add or remove items — the persona's defaults are pre-loaded.",
     )
@@ -460,6 +526,7 @@ with st.sidebar:
             "restrictions": active_restrictions,
             "exclude_from_staples": base_persona.get("exclude_from_staples", []),
             "taste_seeds": taste_seeds,
+            "pantry_expiry": st.session_state.get("pantry_expiry", {}) if prioritize_expiring else {},
         }
     else:
         active_persona = {
@@ -470,6 +537,7 @@ with st.sidebar:
             "restrictions": active_restrictions,
             "exclude_from_staples": [],
             "taste_seeds": [],
+            "pantry_expiry": st.session_state.get("pantry_expiry", {}) if prioritize_expiring else {},
         }
 
     st.markdown("---")

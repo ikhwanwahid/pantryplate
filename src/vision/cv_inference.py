@@ -13,7 +13,7 @@ def detect_ingredients_from_image(image_path: str) -> list[str]:
         image_data = f.read()
 
     response = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model="gemini-3.1-flash-lite",
         contents=[
             types.Part.from_bytes(data=image_data, mime_type="image/jpeg"),
             "List every food ingredient you can see in this fridge image. Reply with only a comma-separated list of ingredient names, nothing else. Example: eggs, milk, carrots, cheese"
