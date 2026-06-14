@@ -446,6 +446,46 @@ with st.sidebar:
         default_macros = {"calories": 600}
         taste_seeds = []  # walk-in has no seeds
 
+        # ----- optional: detect pantry from a fridge photo (CV inference) -----
+        with st.expander("📷 Or upload a fridge photo"):
+            uploaded = st.file_uploader(
+                "Fridge photo", type=["jpg", "jpeg", "png"],
+                label_visibility="collapsed",
+                help="Gemini Vision detects ingredients from the image and loads "
+                     "them into your pantry below. Needs GEMINI_API_KEY in .env.",
+            )
+            if uploaded is not None and st.button("Detect ingredients", use_container_width=True):
+                try:
+                    from src.vision.cv_inference import detect_ingredients_from_image
+                    from src.vision.ingredient_normalizer import normalize
+
+                    suffix = ".png" if uploaded.type == "image/png" else ".jpg"
+                    tmp_path = Path("data") / f"_tmp_fridge{suffix}"
+                    tmp_path.write_bytes(uploaded.getvalue())
+                    mime = "image/png" if suffix == ".png" else "image/jpeg"
+                    detected = normalize(
+                        detect_ingredients_from_image(str(tmp_path), mime_type=mime)
+                    )
+                    tmp_path.unlink(missing_ok=True)
+                    if detected:
+                        st.session_state["cv_pantry"] = detected
+                        st.success(f"Detected {len(detected)}: {', '.join(detected)}")
+                    else:
+                        st.warning("No ingredients detected — try another photo.")
+                except RuntimeError as e:
+                    st.error(str(e))  # e.g. missing GEMINI_API_KEY
+                except Exception as e:  # noqa: BLE001 — surface any CV failure to the user
+                    st.error(f"Detection failed: {e}")
+
+            if st.session_state.get("cv_pantry"):
+                st.caption(f"📷 detected: {', '.join(st.session_state['cv_pantry'])}")
+                if st.button("Clear detected", use_container_width=True):
+                    st.session_state.pop("cv_pantry", None)
+
+        # Photo-detected ingredients take precedence as the pantry default
+        if st.session_state.get("cv_pantry"):
+            default_pantry = st.session_state["cv_pantry"]
+
     # ----- editable inputs (same controls in both modes) ----------------
     st.markdown("**🥕 Pantry**")
     pantry_options = sorted(set(SUGGESTED_PANTRY) | set(default_pantry))
