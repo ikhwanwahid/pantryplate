@@ -453,21 +453,35 @@ with st.sidebar:
     # Detected items are MERGED with the mode's default pantry (persona keeps
     # its usual items + whatever's in the photo); user can deselect any below.
     with st.expander("📷 Detect pantry from a fridge photo"):
-        uploaded = st.file_uploader(
-            "Fridge photo", type=["jpg", "jpeg", "png"],
-            label_visibility="collapsed",
-            help="Gemini Vision detects ingredients from the image and adds "
-                 "them to your pantry below. Needs GEMINI_API_KEY in .env.",
+        source = st.radio(
+            "Image source", ["Upload a photo", "Take a photo"],
+            horizontal=True, label_visibility="collapsed",
         )
-        if uploaded is not None and st.button("Detect ingredients", use_container_width=True):
+        if source == "Take a photo":
+            image_file = st.camera_input(
+                "Point your camera at the fridge",
+                help="Captures a still from your webcam. Browser will ask for "
+                     "camera permission. Needs GEMINI_API_KEY in .env.",
+            )
+        else:
+            image_file = st.file_uploader(
+                "Fridge photo", type=["jpg", "jpeg", "png"],
+                label_visibility="collapsed",
+                help="Gemini Vision detects ingredients from the image and adds "
+                     "them to your pantry below. Needs GEMINI_API_KEY in .env.",
+            )
+
+        if image_file is not None and st.button("Detect ingredients", use_container_width=True):
             try:
                 from src.vision.cv_inference import detect_ingredients_from_image
                 from src.vision.ingredient_normalizer import normalize
 
-                suffix = ".png" if uploaded.type == "image/png" else ".jpg"
+                # camera_input always returns PNG; uploader keeps its own type
+                is_png = getattr(image_file, "type", "") == "image/png"
+                suffix = ".png" if is_png else ".jpg"
                 tmp_path = Path("data") / f"_tmp_fridge{suffix}"
-                tmp_path.write_bytes(uploaded.getvalue())
-                mime = "image/png" if suffix == ".png" else "image/jpeg"
+                tmp_path.write_bytes(image_file.getvalue())
+                mime = "image/png" if is_png else "image/jpeg"
                 detected = normalize(
                     detect_ingredients_from_image(str(tmp_path), mime_type=mime)
                 )
