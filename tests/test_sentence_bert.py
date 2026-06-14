@@ -138,6 +138,23 @@ class TestFitAndRecommendMocked:
             np.testing.assert_allclose(np.linalg.norm(vec), 1.0, rtol=1e-5)
 
     @patch("src.models.sentence_bert.load_recipes")
+    def test_fit_accepts_preloaded_recipes_df_without_reloading(self, mock_load, tmp_path):
+        """Passing recipes_df should skip the internal load_recipes() call
+        (the Streamlit cold-start optimization)."""
+        recipes = self._make_recipes(20)
+        # If fit() calls load_recipes() it gets this empty frame and breaks;
+        # passing recipes_df explicitly should mean it's never consulted.
+        mock_load.return_value = pd.DataFrame({"id": [], "name": [],
+                                               "ingredients_parsed": [], "tags_parsed": []})
+
+        with patch("sentence_transformers.SentenceTransformer", _fake_encoder_class(dim=8)):
+            model = SentenceBERTRecommender(cache_dir=tmp_path, force_rebuild=True)
+            model.fit(self._make_train(n_users=3), recipes_df=recipes)
+
+        assert model._recipe_matrix.shape == (20, 8)
+        mock_load.assert_not_called()
+
+    @patch("src.models.sentence_bert.load_recipes")
     def test_recommend_returns_k_ints(self, mock_load, tmp_path):
         recipes = self._make_recipes(20)
         mock_load.return_value = recipes
