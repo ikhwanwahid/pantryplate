@@ -4,7 +4,7 @@
 
 - **Canonical data**: [`data/processed/stage1_leaderboard.csv`](../data/processed/stage1_leaderboard.csv) (machine-readable; one row per model)
 - **Reference notebooks**: [`notebooks/sentence_bert_smoke.ipynb`](../notebooks/sentence_bert_smoke.ipynb), [`notebooks/tag_svd_smoke.ipynb`](../notebooks/tag_svd_smoke.ipynb)
-- **Last updated**: 2026-06-14 (added BPR, EASE, Hybrid linear)
+- **Last updated**: 2026-06-16 (added BPR, EASE, Hybrid linear; restored @100 columns)
 
 ---
 
@@ -12,24 +12,26 @@
 
 All values are **Recall@K × 100** (i.e. percentage). **Bold** marks the per-column winner.
 
-| Model | Val @10 | Warm @10 | Cold @10 |
-|---|:---:|:---:|:---:|
-| **Popularity** | 0.000 | **2.950** | 0.000 |
-| EASE | 0.000 | 2.900 | 0.000 |
-| BPR | 0.000 | 2.700 | 0.000 |
-| Hybrid linear (α=0.7, EASE+TagSVD) | 0.000 | 1.200 | 0.000 |
-| Hybrid linear (α=0.5, EASE+TagSVD) | 0.000 | 1.200 | 0.000 |
-| Hybrid linear (α=0.3, EASE+TagSVD) | 0.000 | 0.900 | 0.000 |
-| Tag SVD content | 0.017 | 0.000 | 0.010 |
-| **SBERT content** | **0.169** | 0.150 | **0.087** |
-| SBERT + Tag SVD (w=0.25) | 0.102 | 0.100 | 0.087 |
+| Model | Val @10 | Val @100 | Warm @10 | Warm @100 | Cold @10 | Cold @100 |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|
+| Popularity | 0.000 | 0.000 | **2.950** | 11.550 | 0.000 | 0.000 |
+| BPR | 0.000 | 0.000 | 2.700 | **12.250** | 0.000 | 0.000 |
+| EASE | 0.000 | 0.000 | 2.900 | 8.100 | 0.000 | 0.000 |
+| Hybrid linear (α=0.7, EASE+TagSVD) | 0.000 | — | 1.200 | — | 0.000 | — |
+| Hybrid linear (α=0.5, EASE+TagSVD) | 0.000 | — | 1.200 | — | 0.000 | — |
+| Hybrid linear (α=0.3, EASE+TagSVD) | 0.000 | — | 0.900 | — | 0.000 | — |
+| Tag SVD content | 0.017 | 0.288 | 0.000 | 0.500 | 0.010 | 0.164 |
+| **SBERT content** | **0.169** | 0.373 | 0.150 | 0.700 | **0.087** | **0.452** |
+| SBERT + Tag SVD (w=0.25) | 0.102 | **0.458** | 0.100 | 0.800 | 0.087 | 0.366 |
+
+`—` = not yet computed. CF @100 for BPR/EASE independently verified by reviewer; hybrid @100 pending.
 
 Missing entries (open workstreams):
 
 | Model | Owner | Status | Notes |
 |---|---|---|---|
-| MF / ALS (Cornac) | TBD | ⬜ | Rating-prediction baseline |
-| Hybrid linear (EASE+SBERT) | Anastasia | 🟡 | Next step: swap TagSVD content for SBERT to test if cold recall improves |
+| ALS (`implicit` lib) | Anastasia | 🟡 | Code written (`src/models/als.py`); needs `uv add implicit` to run + eval. Tests skip until then. |
+| Hybrid linear (EASE+SBERT) | Anastasia | 🟡 | Next step: swap TagSVD content for SBERT — see finding #7 |
 | Two-tower neural | TBD | ⬜ | Week 4-5 deep + multimodal |
 | SASRec / GRU4Rec (stretch) | TBD | ⬜ | Week 8 if green |
 
@@ -62,13 +64,13 @@ For deck framing: report both. @10 is the standard; @100 is the pipeline argumen
 
 ## Findings so far
 
-1. **Popularity owns warm.** 2.95% @10 — far ahead of every content model. CF is the right tool for warm.
-2. **EASE ≈ Popularity, BPR slightly behind.** EASE 2.90% vs BPR 2.70% on warm @10. EASE is the better CF choice for the hybrid.
-3. **SBERT is the cold winner.** 0.087% @10 (~10× random chance). The content stream produces meaningful candidate coverage on novel recipes.
+1. **Popularity owns warm @10** (2.95%), but is **beaten at @100 by BPR** (12.25% vs 11.55%). CF is the right tool for warm.
+2. **BPR vs EASE depends on which K.** At @10, EASE (2.90%) edges BPR (2.70%). At @100 the order flips hard: **BPR 12.25% vs EASE 8.10%**. Since Stage 1 feeds a top-100 pool to Stage 2, @100 (pool coverage) is the metric that matters → **BPR is the better candidate generator** and the pick for the α-sweep warm track.
+3. **SBERT is the cold winner.** 0.087% @10, 0.452% @100 (~10× random chance). The content stream produces meaningful candidate coverage on novel recipes.
 4. **Tag SVD alone is weak** (0.017% val @10, 0.010% cold @10), but its *features* become useful when concatenated with SBERT — they add complementary candidates.
 5. **Layer 4 (SBERT + Tag SVD concat) wins val/warm @100, loses cold @100.** Mixed verdict that supports model-routing: different upstream content model per query context.
-6. **Pure-CF cold = 0 by construction.** Not a bug. Popularity, EASE, BPR all score 0 on Track B — cold items have no rater history.
-7. **Hybrid linear (EASE+TagSVD) hurts warm vs pure EASE.** Best hybrid (α=0.5–0.7) gets 1.2% warm @10 vs EASE's 2.90%. Tag SVD has zero warm signal, so blending it in dilutes EASE. A hybrid with SBERT as the content side (which gets 0.15% warm) would likely do better — pending eval.
+6. **Pure-CF cold = 0 by construction.** Not a bug. Popularity, BPR, EASE all score 0 on Track B (and on validation, which is also cold-by-construction) — those items have no rater history.
+7. **Hybrid linear (EASE+TagSVD) hurts warm vs pure EASE.** Best hybrid (α=0.5–0.7) gets 1.2% warm @10 vs EASE's 2.90%. Tag SVD has zero warm signal, so blending it in dilutes EASE. A hybrid with SBERT as the content side (0.15% warm, 0.45% cold @100) is the open follow-up — it should retain CF's warm strength while adding non-zero cold, unlike the TagSVD blend.
 
 See the notebooks linked at the top for the full iteration log (SBERT layers 2/3/4 sweeps with executed results).
 
