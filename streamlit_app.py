@@ -106,6 +106,10 @@ h1, h2, h3 { font-family: 'Georgia', serif; font-weight: 700; }
 .score-chip.diet-no { background: #F2D8D2; color: #8B3826; }
 .score-chip.final   { background: #2D3142; color: #FAF8F3; }
 
+/* novelty: highlights cold/novel items SBERT surfaces (vs popularity defaults) */
+.score-chip.novelty-novel   { background: #E4EFD9; color: #3C5E26; border: 1px dashed #7A9A6E; }
+.score-chip.novelty-popular { background: #F1ECE0; color: #6E6F75; }
+
 /* --- sidebar polish --- */
 [data-testid="stSidebar"] {
     background: #F1ECE0;
@@ -116,18 +120,6 @@ h1, h2, h3 { font-family: 'Georgia', serif; font-weight: 700; }
     border-bottom: 2px solid #C75D2C;
     padding-bottom: 6px;
     margin-bottom: 18px;
-}
-
-/* --- alpha summary --- */
-.alpha-summary {
-    background: #ffffff;
-    border-radius: 10px;
-    padding: 12px 16px;
-    margin-top: 10px;
-    text-align: center;
-    font-family: 'Georgia', serif;
-    color: #2D3142;
-    border: 1px dashed #C75D2C;
 }
 
 /* --- header --- */
@@ -171,7 +163,9 @@ def load_models_and_data():
     recipes = recipes_raw.set_index(recipes_raw["id"].rename("recipe_id"))
 
     pop = PopularityRecommender().fit(train)
-    sbert = SentenceBERTRecommender(batch_size=256).fit(train)
+    # Pass the already-parsed catalogue so fit() doesn't re-parse the 230K-row
+    # recipe CSV a second time — roughly halves cold start.
+    sbert = SentenceBERTRecommender(batch_size=256).fit(train, recipes_df=recipes_raw)
 
     personas = {}
     for p_path in sorted(Path("data/personas").glob("*.json")):
@@ -179,11 +173,17 @@ def load_models_and_data():
             p = json.load(f)
             personas[p["id"]] = p
 
+    # Per-recipe unique-rater count — drives the novelty badge / filter.
+    # A recipe with 0 raters in train is what the leaderboard calls a "cold item":
+    # exactly the case SBERT's cold-track training was meant to serve.
+    rater_counts = train.groupby("recipe_id")["user_id"].nunique().to_dict()
+
     return {
         "recipes": recipes,
         "pop": pop,
         "sbert": sbert,
         "personas": personas,
+        "rater_counts": rater_counts,
     }
 
 
@@ -297,6 +297,9 @@ def render_recipe_card(rank: int, recipe_id: int, name: str, scored_row: pd.Seri
         else '<span class="score-chip diet-no">✗ diet filter</span>'
     )
 
+    novelty_cls, novelty_label = novelty_for(recipe_id)
+    novelty_chip = f'<span class="score-chip {novelty_cls}">{novelty_label}</span>'
+
     return f"""
     <div class="{card_class}">
         <span class="recipe-rank rank-{rank}">#{rank}</span>
@@ -307,6 +310,7 @@ def render_recipe_card(rank: int, recipe_id: int, name: str, scored_row: pd.Seri
             <span class="score-chip pantry">🥕 pantry {scored_row['s_pantry']:.2f}</span>
             <span class="score-chip macros">🥗 macros {scored_row['s_nutrition']:.2f}</span>
             {diet_chip}
+            {novelty_chip}
             <span class="score-chip final">final {scored_row['final']:.3f}</span>
         </div>
     </div>
@@ -337,6 +341,28 @@ recipes = data["recipes"]
 pop = data["pop"]
 sbert = data["sbert"]
 personas = data["personas"]
+rater_counts = data["rater_counts"]
+
+# Threshold for the novelty badge — "novel" = has < this many raters in train.
+# 10 is a nice midpoint: every cold (zero-rater) recipe plus emerging ones with
+# small followings get badged. The leaderboard's "cold track" uses zero-rater
+# strictly; we relax slightly here so the badge marks more candidates.
+NOVELTY_THRESHOLD = 10
+
+
+def novelty_for(recipe_id: int) -> tuple[str, str]:
+    """Return (css_class, label) for a recipe's novelty badge.
+
+    Returns one of:
+        ("novelty-novel",   "🌱 novel  (Nr raters)")
+        ("novelty-popular", "📈 popular (Nr raters)")
+    """
+    n = int(rater_counts.get(int(recipe_id), 0))
+    if n < NOVELTY_THRESHOLD:
+        if n == 0:
+            return ("novelty-novel", "🌱 cold item · 0 raters")
+        return ("novelty-novel", f"🌱 novel · {n} rater{'s' if n != 1 else ''}")
+    return ("novelty-popular", f"📈 popular · {n:,} raters")
 
 
 # =============================================================================
@@ -409,6 +435,68 @@ with st.sidebar:
         default_restrictions = []
         default_macros = {"calories": 600}
         taste_seeds = []  # walk-in has no seeds
+
+    # ----- optional: detect pantry from a fridge photo (CV inference) -----
+    # Available in BOTH modes — it's just another way to fill the pantry.
+    # Detected items are MERGED with the mode's default pantry (persona keeps
+    # its usual items + whatever's in the photo); user can deselect any below.
+    with st.expander("📷 Detect pantry from a fridge photo"):
+        source = st.radio(
+            "Image source", ["Upload a photo", "Take a photo"],
+            horizontal=True, label_visibility="collapsed",
+        )
+        if source == "Take a photo":
+            image_file = st.camera_input(
+                "Point your camera at the fridge",
+                help="Captures a still from your webcam. Browser will ask for "
+                     "camera permission. Needs GEMINI_API_KEY in .env.",
+            )
+        else:
+            image_file = st.file_uploader(
+                "Fridge photo", type=["jpg", "jpeg", "png"],
+                label_visibility="collapsed",
+                help="Gemini Vision detects ingredients from the image and adds "
+                     "them to your pantry below. Needs GEMINI_API_KEY in .env.",
+            )
+
+        if image_file is not None and st.button("Detect ingredients", use_container_width=True):
+            try:
+                from src.vision.cv_inference import detect_ingredients_from_image
+                from src.vision.ingredient_normalizer import normalize
+
+                # camera_input always returns PNG; uploader keeps its own type
+                is_png = getattr(image_file, "type", "") == "image/png"
+                suffix = ".png" if is_png else ".jpg"
+                tmp_path = Path("data") / f"_tmp_fridge{suffix}"
+                tmp_path.write_bytes(image_file.getvalue())
+                mime = "image/png" if is_png else "image/jpeg"
+                detected = normalize(
+                    detect_ingredients_from_image(str(tmp_path), mime_type=mime)
+                )
+                tmp_path.unlink(missing_ok=True)
+                if detected:
+                    st.session_state["cv_pantry"] = detected
+                    st.success(f"Detected {len(detected)}: {', '.join(detected)}")
+                else:
+                    st.warning("No ingredients detected — try another photo.")
+            except RuntimeError as e:
+                st.error(str(e))  # e.g. missing GEMINI_API_KEY
+            except Exception as e:  # noqa: BLE001 — surface any CV failure to the user
+                st.error(f"Detection failed: {e}")
+
+        if st.session_state.get("cv_pantry"):
+            st.caption(f"📷 detected: {', '.join(st.session_state['cv_pantry'])}")
+            if st.button("Clear detected", use_container_width=True):
+                st.session_state.pop("cv_pantry", None)
+
+    # Merge photo-detected ingredients into the pantry default (union, order:
+    # mode defaults first, then any new detected items).
+    if st.session_state.get("cv_pantry"):
+        merged = list(default_pantry)
+        for item in st.session_state["cv_pantry"]:
+            if item not in merged:
+                merged.append(item)
+        default_pantry = merged
 
     # ----- editable inputs (same controls in both modes) ----------------
     st.markdown("**🥕 Pantry**")
@@ -523,28 +611,15 @@ with st.sidebar:
     alpha_pantry    = float(st.session_state["alpha_pantry"])
     alpha_nutrition = float(st.session_state["alpha_nutrition"])
 
-    # Sanity / display — values now always sum to ~1
-    total_show = alpha_taste + alpha_pantry + alpha_nutrition
-    st.markdown(
-        f"""
-        <div class='alpha-summary'>
-            current mix (sum = {total_show:.2f})<br>
-            🍴 {alpha_taste:.2f} &nbsp; 🥕 {alpha_pantry:.2f} &nbsp; 🥗 {alpha_nutrition:.2f}
-        </div>
-        """,
-        unsafe_allow_html=True,
+    st.markdown("---")
+    st.markdown("## Discovery options")
+    only_novel = st.toggle(
+        "🌱 Surface novel recipes only",
+        value=False,
+        help=f"Filter the candidate pool to recipes with fewer than {NOVELTY_THRESHOLD} "
+             "raters in the training data. These are 'cold items' — the use case the "
+             "content model (SBERT) was specifically designed to handle. Off by default.",
     )
-
-    # Quick presets for live demo — one click jumps to a simplex corner
-    pc1, pc2, pc3, pc4 = st.columns(4)
-    def _set_alpha(t: float, p: float, n: float) -> None:
-        st.session_state["alpha_taste"]     = t
-        st.session_state["alpha_pantry"]    = p
-        st.session_state["alpha_nutrition"] = n
-    if pc1.button("⚖️ Balanced",  use_container_width=True): _set_alpha(0.50, 0.30, 0.20)
-    if pc2.button("🍴 Taste",      use_container_width=True): _set_alpha(1.00, 0.00, 0.00)
-    if pc3.button("🥕 Pantry",     use_container_width=True): _set_alpha(0.00, 1.00, 0.00)
-    if pc4.button("🥗 Macros",     use_container_width=True): _set_alpha(0.00, 0.00, 1.00)
 
     st.markdown("---")
     k_show = st.number_input("How many recipes to show?", min_value=3, max_value=20, value=10, step=1)
@@ -582,8 +657,19 @@ candidate_ids = filter_by_diet(
     initial_ids,
     active_persona["restrictions"],
     recipes,
-    target_k=POOL_SIZE,
+    target_k=POOL_SIZE if not only_novel else POOL_SIZE * 4,
 )
+
+# Optional novelty filter — keep only candidates with < NOVELTY_THRESHOLD raters
+# in train. This is what SBERT's cold-track training was for: surfacing recipes
+# nobody has rated yet. Off by default; on for the "show me discoveries" demo path.
+n_pre_novelty = len(candidate_ids)
+if only_novel:
+    candidate_ids = [
+        rid for rid in candidate_ids
+        if int(rater_counts.get(int(rid), 0)) < NOVELTY_THRESHOLD
+    ][:POOL_SIZE]
+
 taste_scores = {rid: 1.0 / (rank + 1) for rank, rid in enumerate(candidate_ids)}
 
 # Surface what happened during filtering — helps the audience understand
@@ -596,6 +682,15 @@ if active_persona["restrictions"] and n_compliant < POOL_SIZE:
         f"{n_compliant} satisfy "
         f"{', '.join(active_persona['restrictions'])}. "
         f"{'Try widening your pantry or relaxing the diet filter for more variety.' if n_compliant < 10 else ''}"
+    )
+
+if only_novel:
+    n_after_novelty = len(candidate_ids)
+    st.info(
+        f"🌱 Novelty filter applied. {n_after_novelty}/{n_pre_novelty} candidates "
+        f"have fewer than {NOVELTY_THRESHOLD} raters in train — these are the "
+        f"recipes content models (SBERT) were specifically trained to surface."
+        f"{' Try toggling off to compare with the full pool.' if n_after_novelty < 10 else ''}"
     )
 
 # Stage 2 — rerank with the current alphas
