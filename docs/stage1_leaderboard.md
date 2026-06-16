@@ -4,7 +4,7 @@
 
 - **Canonical data**: [`data/processed/stage1_leaderboard.csv`](../data/processed/stage1_leaderboard.csv) (machine-readable; one row per model)
 - **Reference notebooks**: [`notebooks/sentence_bert_smoke.ipynb`](../notebooks/sentence_bert_smoke.ipynb), [`notebooks/tag_svd_smoke.ipynb`](../notebooks/tag_svd_smoke.ipynb)
-- **Last updated**: 2026-06-16 (added BPR, EASE, ALS, Hybrid linear; restored @100 columns)
+- **Last updated**: 2026-06-16 (added EASE+SBERT hybrid rows; full CF + hybrid set)
 
 ---
 
@@ -21,6 +21,9 @@ All values are **Recall@K × 100** (i.e. percentage). **Bold** marks the per-col
 | Hybrid linear (α=0.7, EASE+TagSVD) | 0.000 | — | 1.200 | — | 0.000 | — |
 | Hybrid linear (α=0.5, EASE+TagSVD) | 0.000 | — | 1.200 | — | 0.000 | — |
 | Hybrid linear (α=0.3, EASE+TagSVD) | 0.000 | — | 0.900 | — | 0.000 | — |
+| Hybrid linear (α=0.7, EASE+SBERT) | — | — | 1.750 | 4.450 | 0.019 | 0.087 |
+| Hybrid linear (α=0.5, EASE+SBERT) | — | — | 1.600 | 4.200 | 0.019 | 0.087 |
+| Hybrid linear (α=0.3, EASE+SBERT) | — | — | 1.400 | 3.950 | 0.019 | 0.087 |
 | Tag SVD content | 0.017 | 0.288 | 0.000 | 0.500 | 0.010 | 0.164 |
 | **SBERT content** | **0.169** | 0.373 | 0.150 | 0.700 | **0.087** | **0.452** |
 | SBERT + Tag SVD (w=0.25) | 0.102 | **0.458** | 0.100 | 0.800 | 0.087 | 0.366 |
@@ -31,7 +34,6 @@ Missing entries (open workstreams):
 
 | Model | Owner | Status | Notes |
 |---|---|---|---|
-| Hybrid linear (EASE+SBERT) | Anastasia | 🟡 | Next step: swap TagSVD content for SBERT — see finding #7 |
 | Two-tower neural | TBD | ⬜ | Week 4-5 deep + multimodal |
 | SASRec / GRU4Rec (stretch) | TBD | ⬜ | Week 8 if green |
 
@@ -70,7 +72,7 @@ For deck framing: report both. @10 is the standard; @100 is the pipeline argumen
 4. **Tag SVD alone is weak** (0.017% val @10, 0.010% cold @10), but its *features* become useful when concatenated with SBERT — they add complementary candidates.
 5. **Layer 4 (SBERT + Tag SVD concat) wins val/warm @100, loses cold @100.** Mixed verdict that supports model-routing: different upstream content model per query context.
 6. **Pure-CF cold = 0 by construction.** Not a bug. Popularity, BPR, EASE all score 0 on Track B (and on validation, which is also cold-by-construction) — those items have no rater history.
-7. **Hybrid linear (EASE+TagSVD) hurts warm vs pure EASE.** Best hybrid (α=0.5–0.7) gets 1.2% warm @10 vs EASE's 2.90%. Tag SVD has zero warm signal, so blending it in dilutes EASE. A hybrid with SBERT as the content side (0.15% warm, 0.45% cold @100) is the open follow-up — it should retain CF's warm strength while adding non-zero cold, unlike the TagSVD blend.
+7. **Linear hybrids lose to routing — both content sides.** EASE+TagSVD: best 1.2% warm @10 (TagSVD has zero warm signal → dilutes EASE). EASE+SBERT (now measured): better than the TagSVD blend (1.75% warm @10 / 4.45% @100 at α=0.7) AND gets *non-zero cold* (0.019% @10, 0.087% @100) — but still **loses to BPR on warm** (2.70/12.25) and **to SBERT on cold** (0.087/0.452). It beats neither parent on its home track. **Conclusion: model routing (BPR for warm, SBERT for cold) beats a single linear hybrid** — the architectural takeaway. (Cold is flat across α for the hybrid since cold items get content-only scoring.)
 
 See the notebooks linked at the top for the full iteration log (SBERT layers 2/3/4 sweeps with executed results).
 
