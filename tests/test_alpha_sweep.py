@@ -15,6 +15,7 @@ from src.eval.alpha_sweep import (
     UserCase,
     best_point,
     derive_user_constraints,
+    per_user_metrics,
     precompute_user_cases,
     simplex_grid,
     sweep,
@@ -165,6 +166,22 @@ def test_taste_corner_recovers_stage1_top1():
     df = sweep(cases, k=1, step=1.0)  # only the 3 corners
     taste_corner = df[(df["alpha_taste"] == 1.0)].iloc[0]
     assert taste_corner["recall@1"] == 1.0
+
+
+def test_per_user_metrics_shape_and_pairing():
+    """per_user_metrics returns one aligned row per case — the input to a paired test."""
+    recipes = _recipes()
+    constraints = derive_user_constraints(_train(), recipes, user_ids=[1, 2])
+    model = _StubModel({1: [11, 10, 12, 13], 2: [12, 10, 11, 13]})
+    cases = precompute_user_cases(model, {1: 11, 2: 12}, recipes, constraints, k_pool=4)
+    a = per_user_metrics(cases, (1.0, 0.0, 0.0), k=2)
+    b = per_user_metrics(cases, (0.0, 1.0, 0.0), k=2)
+    # one row per case, same user order (paired)
+    assert len(a) == len(b) == len(cases)
+    assert list(a["user_id"]) == list(b["user_id"]) == [c.user_id for c in cases]
+    for col in ("recall@2", "cookable_rate@2", "useful_rate@2"):
+        assert col in a.columns
+        assert ((a[col] >= 0) & (a[col] <= 1)).all()
 
 
 def test_best_point_returns_max():

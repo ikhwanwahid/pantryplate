@@ -126,14 +126,38 @@ Warm Recall@10 and the paired Wilcoxon p-value vs Popularity for each:
 **All 17 configs: p > 0.07 — none significantly beats Popularity.** The warm CF ≈ Popularity
 result is a property of the sparse data, not under-tuning.
 
+### Stage 2 α-sweep — corner contrasts (paired Wilcoxon, BPR/warm, k=10)
+
+Unlike the Stage-1 model comparisons, **every α-sweep corner contrast is significant** —
+moving along the (αₜ, αₚ, αₙ) simplex changes the metrics in large, statistically real ways:
+
+| Contrast | Δ | p-value | Significant |
+|---|---|---|---|
+| Cookable-rate: pantry vs taste (33%→76%) | +42.75pp | 1.5×10⁻³¹⁰ | ✅ |
+| Relevance Recall@10: taste vs pantry | +1.20pp | 0.0047 | ✅ |
+| Relevance Recall@10: taste vs nutrition | +1.45pp | 0.0002 | ✅ |
+| Useful-rate: nutrition vs taste | +0.86pp | 3.6×10⁻²⁰ | ✅ |
+
+So the **taste ↔ constraint trade-off is statistically significant on all three axes** — the
+X-factor is a real effect, not visual noise. (Reproduce: `per_user_metrics` in
+`src/eval/alpha_sweep.py` + `paired_wilcoxon` in `src/eval/significance.py`.)
+
+> **Paired-test note for the defense:** for relevance, the *marginal* CIs overlap (taste
+> [2.0, 3.4] vs pantry [0.95, 2.05]) yet the *paired* test is significant (p=0.0047). No
+> contradiction — the comparison is paired (same users + pool, only α changes), so the
+> paired test removes between-user variance and detects the systematic shift the marginal
+> CIs hide. "Error bars overlap" is the wrong lens here.
+
 ### What this means
 
-- **CF ≈ Popularity on warm** (tuned, significance-tested) → the architectural leverage is
-  *not* Stage-1 CF. It's Stage-2 constraint handling and cold-start content.
-- **SBERT significantly helps cold-start** (p=0.011) → the one statistically real model win,
-  and it backs the routing decision (content for novel recipes).
-- Absolute numbers are small because we rank against the **full catalogue** (~20K–231K items;
-  random Recall@10 ≈ 0.05%), not sampled negatives. Report the lift-over-random framing.
+- **Stage 1: CF ≈ Popularity on warm** (tuned, significance-tested) → model choice barely
+  matters on this data. The architectural leverage is *not* Stage-1 CF.
+- **Stage 2: the constraint weighting matters a lot** — all corner contrasts significant.
+  The leverage is exactly where our contribution sits.
+- **SBERT significantly helps cold-start** (p=0.011) → the one statistically real *model* win,
+  backing the routing decision (content for novel recipes).
+- Absolute Stage-1 numbers are small because we rank against the **full catalogue** (~20K–231K
+  items; random Recall@10 ≈ 0.05%), not sampled negatives. Report the lift-over-random framing.
 
 ---
 
