@@ -124,6 +124,9 @@ class UserCase:
     s_taste: np.ndarray         # (n_pool,) min-max normalized taste score
     s_pantry: np.ndarray        # (n_pool,) pantry overlap in [0,1]
     s_nutrition: np.ndarray     # (n_pool,) macro proximity in [0,1]
+    cand_feasible: np.ndarray   # (n_pool,) bool — candidate pantry-feasible (missing ≤ thresh)
+    cand_near: np.ndarray       # (n_pool,) bool — candidate macros within ±tol
+    cand_useful: np.ndarray     # (n_pool,) bool — feasible AND near
     holdout_id: int
     holdout_in_pool: bool
     holdout_useful: bool        # held-out item satisfies the user's constraints
@@ -174,11 +177,18 @@ def precompute_user_cases(
 
         s_pantry = np.empty(len(cand), dtype=np.float64)
         s_nutrition = np.empty(len(cand), dtype=np.float64)
+        cand_feasible = np.empty(len(cand), dtype=bool)
+        cand_near = np.empty(len(cand), dtype=bool)
+        has_macros = bool(macro_targets)
         for i, (_, row) in enumerate(rows.iterrows()):
             ings = row.get("ingredients_parsed") or []
             nut = row.get("nutrition_parsed") or {}
             s_pantry[i] = pantry_score(ings, pantry)
             s_nutrition[i] = nutrition_score(nut, macro_targets, tolerance=macro_tolerance)
+            # per-candidate hard constraint flags (for the dense top-K useful-rate)
+            cand_feasible[i] = missing_count(ings, pantry) <= pantry_missing_threshold
+            cand_near[i] = is_macro_near(nut, macro_targets, tolerance=macro_tolerance) if has_macros else True
+        cand_useful = cand_feasible & cand_near
 
         holdout_id = int(holdout_id)
         in_pool = holdout_id in set(cand)
@@ -199,6 +209,9 @@ def precompute_user_cases(
             s_taste=s_taste.astype(np.float64),
             s_pantry=s_pantry,
             s_nutrition=s_nutrition,
+            cand_feasible=cand_feasible,
+            cand_near=cand_near,
+            cand_useful=cand_useful,
             holdout_id=holdout_id,
             holdout_in_pool=in_pool,
             holdout_useful=useful,
@@ -225,16 +238,13 @@ def simplex_grid(step: float = 0.05) -> list[tuple[float, float, float]]:
     return pts
 
 
-def _hit_at_k(case: UserCase, weights: tuple[float, float, float], k: int) -> bool:
-    """Is the held-out item in the top-K of this user's pool at these weights?"""
-    if not case.holdout_in_pool:
-        return False
+def _topk_idx(case: UserCase, weights: tuple[float, float, float], k: int) -> np.ndarray:
+    """Indices of the top-K candidates for this user at these weights."""
     at, ap, an = weights
     final = at * case.s_taste + ap * case.s_pantry + an * case.s_nutrition
     k_eff = min(k, final.size)
-    top_idx = np.argpartition(-final, k_eff - 1)[:k_eff]
-    top_ids = case.candidate_ids[top_idx]
-    return case.holdout_id in top_ids
+    top = np.argpartition(-final, k_eff - 1)[:k_eff]
+    return top
 
 
 def sweep(
@@ -244,8 +254,17 @@ def sweep(
 ) -> pd.DataFrame:
     """Run the α-sweep; return a DataFrame with one row per simplex point.
 
-    Columns: alpha_taste, alpha_pantry, alpha_nutrition, recall@k, useful_recall@k.
-    Both metrics are means over the user cases.
+    Columns per simplex point (all means over the user cases):
+      - recall@k           : held-out item in top-K  (RELEVANCE; needs ground truth)
+      - useful_recall@k    : held-out item in top-K AND it's useful (sparse here —
+                             only meaningful with looser thresholds; see notes)
+      - useful_rate@k      : fraction of the top-K that are useful (DENSE constraint-
+                             satisfaction signal; no ground truth needed)
+      - feasible_rate@k    : fraction of the top-K that are pantry-feasible
+      - near_rate@k        : fraction of the top-K that are macro-near
+
+    The headline trade-off is recall@k (relevance) vs useful_rate@k (constraint
+    satisfaction) across the simplex.
     """
     grid = simplex_grid(step)
     n_users = len(cases)
@@ -253,18 +272,30 @@ def sweep(
     for (at, ap, an) in grid:
         recall_hits = 0
         useful_hits = 0
+        useful_sum = 0.0
+        feasible_sum = 0.0
+        near_sum = 0.0
         for case in cases:
-            hit = _hit_at_k(case, (at, ap, an), k)
-            if hit:
+            top = _topk_idx(case, (at, ap, an), k)
+            # dense top-K constraint-satisfaction rates
+            useful_sum += float(case.cand_useful[top].mean())
+            feasible_sum += float(case.cand_feasible[top].mean())
+            near_sum += float(case.cand_near[top].mean())
+            # held-out relevance (needs the item to be in the pool)
+            if case.holdout_in_pool and case.holdout_id in case.candidate_ids[top]:
                 recall_hits += 1
                 if case.holdout_useful:
                     useful_hits += 1
+        denom = n_users if n_users else 1
         records.append({
             "alpha_taste": at,
             "alpha_pantry": ap,
             "alpha_nutrition": an,
-            f"recall@{k}": recall_hits / n_users if n_users else 0.0,
-            f"useful_recall@{k}": useful_hits / n_users if n_users else 0.0,
+            f"recall@{k}": recall_hits / denom,
+            f"useful_recall@{k}": useful_hits / denom,
+            f"useful_rate@{k}": useful_sum / denom,
+            f"feasible_rate@{k}": feasible_sum / denom,
+            f"near_rate@{k}": near_sum / denom,
         })
     return pd.DataFrame(records)
 

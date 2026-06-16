@@ -130,10 +130,18 @@ def test_precompute_and_sweep_end_to_end():
 
     df = sweep(cases, k=1, step=0.5)
     # at k=1, recall is 1 only when held-out (11) is the single top item
-    assert {"alpha_taste", "alpha_pantry", "alpha_nutrition", "recall@1", "useful_recall@1"} <= set(df.columns)
+    expected_cols = {"alpha_taste", "alpha_pantry", "alpha_nutrition",
+                     "recall@1", "useful_recall@1", "useful_rate@1",
+                     "feasible_rate@1", "near_rate@1"}
+    assert expected_cols <= set(df.columns)
     assert ((df["recall@1"] >= 0) & (df["recall@1"] <= 1)).all()
     # useful_recall <= recall everywhere (subset condition)
     assert (df["useful_recall@1"] <= df["recall@1"] + 1e-9).all()
+    # dense rates are valid fractions; useful_rate ⊆ feasible_rate and ⊆ near_rate
+    for col in ("useful_rate@1", "feasible_rate@1", "near_rate@1"):
+        assert ((df[col] >= 0) & (df[col] <= 1)).all()
+    assert (df["useful_rate@1"] <= df["feasible_rate@1"] + 1e-9).all()
+    assert (df["useful_rate@1"] <= df["near_rate@1"] + 1e-9).all()
 
 
 def test_holdout_not_in_pool_never_recalled():
