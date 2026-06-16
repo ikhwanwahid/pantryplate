@@ -247,6 +247,30 @@ def _topk_idx(case: UserCase, weights: tuple[float, float, float], k: int) -> np
     return top
 
 
+def per_user_metrics(cases: list[UserCase], weights: tuple[float, float, float], k: int = 10) -> pd.DataFrame:
+    """Per-user top-K metrics at one simplex point — the inputs to a paired test.
+
+    Returns a DataFrame (one row per user) with columns:
+      user_id, recall@k (0/1 hit), cookable_rate@k, useful_rate@k
+
+    Pair two of these (same `cases`, two weightings) with
+    `significance.compare_models` / `paired_wilcoxon` to test whether moving
+    along the simplex changes a metric significantly. Because both corners use
+    the same users + pools (only α differs), the comparison is naturally paired.
+    """
+    rows = []
+    for c in cases:
+        top = _topk_idx(c, weights, k)
+        hit = 1.0 if (c.holdout_in_pool and c.holdout_id in c.candidate_ids[top]) else 0.0
+        rows.append({
+            "user_id": c.user_id,
+            f"recall@{k}": hit,
+            f"cookable_rate@{k}": float(c.cand_feasible[top].mean()),
+            f"useful_rate@{k}": float(c.cand_useful[top].mean()),
+        })
+    return pd.DataFrame(rows)
+
+
 def sweep(
     cases: list[UserCase],
     k: int = 10,
