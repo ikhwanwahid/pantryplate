@@ -6,6 +6,9 @@ ALS,0.0,0.0,2.05,7.95,0.0,0.0
 Hybrid linear (a=0.7 EASE+TagSVD),0.0,,1.2,,0.0,
 Hybrid linear (a=0.5 EASE+TagSVD),0.0,,1.2,,0.0,
 Hybrid linear (a=0.3 EASE+TagSVD),0.0,,0.9,,0.0,
+Hybrid linear (a=0.7 EASE+SBERT),,,1.75,4.45,0.019,0.087
+Hybrid linear (a=0.5 EASE+SBERT),,,1.6,4.2,0.019,0.087
+Hybrid linear (a=0.3 EASE+SBERT),,,1.4,3.95,0.019,0.087
 Tag SVD content,0.017,0.288,0.0,0.5,0.01,0.164
 SBERT content,0.169,0.373,0.15,0.7,0.087,0.452
 SBERT + Tag SVD (w=0.25),0.102,0.458,0.1,0.8,0.087,0.366
