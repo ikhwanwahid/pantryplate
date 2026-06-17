@@ -119,7 +119,7 @@ Create a `.env` file in the project root:
 GEMINI_API_KEY=your_key_here
 ```
 
-Get a free Gemini API key at **aistudio.google.com** — no credit card required, 1,500 requests/day free, no expiration.
+Get a free Gemini API key at **aistudio.google.com**
 
 ### 3. Download the Food.com dataset
 
