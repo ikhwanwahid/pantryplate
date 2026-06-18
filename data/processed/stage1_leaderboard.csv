@@ -12,5 +12,5 @@ Hybrid linear (a=0.3 EASE+SBERT),,,1.4,3.95,0.019,0.087
 Tag SVD content,0.017,0.288,0.0,0.5,0.01,0.164
 SBERT content,0.169,0.373,0.15,0.7,0.087,0.452
 SBERT + Tag SVD (w=0.25),0.102,0.458,0.1,0.8,0.087,0.366
-LightGCN [EXPLORATORY - unreviewed, not on locked model menu],,,3.05,11.3,0.0,0.0
-NeuMF [EXPLORATORY - unreviewed, not on locked model menu],,,2.05,9.85,0.0,0.0
+LightGCN [EXPLORATORY - unreviewed - not on locked model menu],,,3.05,11.3,0.0,0.0
+NeuMF [EXPLORATORY - unreviewed - not on locked model menu],,,2.05,9.85,0.0,0.0
