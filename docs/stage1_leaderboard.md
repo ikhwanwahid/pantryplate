@@ -4,7 +4,7 @@
 
 - **Canonical data**: [`data/processed/stage1_leaderboard.csv`](../data/processed/stage1_leaderboard.csv) (machine-readable; one row per model)
 - **Reference notebooks**: [`notebooks/sentence_bert_smoke.ipynb`](../notebooks/sentence_bert_smoke.ipynb), [`notebooks/tag_svd_smoke.ipynb`](../notebooks/tag_svd_smoke.ipynb)
-- **Last updated**: 2026-06-16 (added BPR, EASE, Hybrid linear; restored @100 columns)
+- **Last updated**: 2026-06-16 (added statistical-significance + CF-tuning section)
 
 ---
 
@@ -17,21 +17,23 @@ All values are **Recall@K × 100** (i.e. percentage). **Bold** marks the per-col
 | Popularity | 0.000 | 0.000 | **2.950** | 11.550 | 0.000 | 0.000 |
 | BPR | 0.000 | 0.000 | 2.700 | **12.250** | 0.000 | 0.000 |
 | EASE | 0.000 | 0.000 | 2.900 | 8.100 | 0.000 | 0.000 |
+| ALS (`implicit`) | 0.000 | 0.000 | 2.050 | 7.950 | 0.000 | 0.000 |
 | Hybrid linear (α=0.7, EASE+TagSVD) | 0.000 | — | 1.200 | — | 0.000 | — |
 | Hybrid linear (α=0.5, EASE+TagSVD) | 0.000 | — | 1.200 | — | 0.000 | — |
 | Hybrid linear (α=0.3, EASE+TagSVD) | 0.000 | — | 0.900 | — | 0.000 | — |
+| Hybrid linear (α=0.7, EASE+SBERT) | — | — | 1.750 | 4.450 | 0.019 | 0.087 |
+| Hybrid linear (α=0.5, EASE+SBERT) | — | — | 1.600 | 4.200 | 0.019 | 0.087 |
+| Hybrid linear (α=0.3, EASE+SBERT) | — | — | 1.400 | 3.950 | 0.019 | 0.087 |
 | Tag SVD content | 0.017 | 0.288 | 0.000 | 0.500 | 0.010 | 0.164 |
 | **SBERT content** | **0.169** | 0.373 | 0.150 | 0.700 | **0.087** | **0.452** |
 | SBERT + Tag SVD (w=0.25) | 0.102 | **0.458** | 0.100 | 0.800 | 0.087 | 0.366 |
 
-`—` = not yet computed. CF @100 for BPR/EASE independently verified by reviewer; hybrid @100 pending.
+`—` = not yet computed. CF @100 for BPR/EASE/ALS independently verified by reviewer; hybrid @100 pending.
 
 Missing entries (open workstreams):
 
 | Model | Owner | Status | Notes |
 |---|---|---|---|
-| ALS (`implicit` lib) | Anastasia | 🟡 | Code written (`src/models/als.py`); needs `uv add implicit` to run + eval. Tests skip until then. |
-| Hybrid linear (EASE+SBERT) | Anastasia | 🟡 | Next step: swap TagSVD content for SBERT — see finding #7 |
 | Two-tower neural | TBD | ⬜ | Week 4-5 deep + multimodal |
 | SASRec / GRU4Rec (stretch) | TBD | ⬜ | Week 8 if green |
 
@@ -64,15 +66,98 @@ For deck framing: report both. @10 is the standard; @100 is the pipeline argumen
 
 ## Findings so far
 
-1. **Popularity owns warm @10** (2.95%), but is **beaten at @100 by BPR** (12.25% vs 11.55%). CF is the right tool for warm.
-2. **BPR vs EASE depends on which K.** At @10, EASE (2.90%) edges BPR (2.70%). At @100 the order flips hard: **BPR 12.25% vs EASE 8.10%**. Since Stage 1 feeds a top-100 pool to Stage 2, @100 (pool coverage) is the metric that matters → **BPR is the better candidate generator** and the pick for the α-sweep warm track.
+1. **No CF model significantly beats Popularity on warm.** Popularity 2.95%, EASE 2.90%, BPR 2.70% @10 — the 95% CIs overlap almost entirely and paired Wilcoxon gives p > 0.4 (see § Statistical significance). This holds **even after tuning** (17 EASE/BPR configs, all p > 0.07). On sparse Food.com LOO, collaborative filtering offers no significant gain over a popularity prior — a rigorous null result, not under-tuning.
+2. **At @100, BPR has the widest pool** (12.25% vs Popularity 11.55%), but the gap is **not statistically significant** (p = 0.16). We still use BPR as the α-sweep warm generator because it's the numerically-best candidate pool, while noting Popularity is statistically equivalent. EASE collapses at @100 (8.10%); ALS is weakest (2.05 / 7.95).
 3. **SBERT is the cold winner.** 0.087% @10, 0.452% @100 (~10× random chance). The content stream produces meaningful candidate coverage on novel recipes.
 4. **Tag SVD alone is weak** (0.017% val @10, 0.010% cold @10), but its *features* become useful when concatenated with SBERT — they add complementary candidates.
 5. **Layer 4 (SBERT + Tag SVD concat) wins val/warm @100, loses cold @100.** Mixed verdict that supports model-routing: different upstream content model per query context.
 6. **Pure-CF cold = 0 by construction.** Not a bug. Popularity, BPR, EASE all score 0 on Track B (and on validation, which is also cold-by-construction) — those items have no rater history.
-7. **Hybrid linear (EASE+TagSVD) hurts warm vs pure EASE.** Best hybrid (α=0.5–0.7) gets 1.2% warm @10 vs EASE's 2.90%. Tag SVD has zero warm signal, so blending it in dilutes EASE. A hybrid with SBERT as the content side (0.15% warm, 0.45% cold @100) is the open follow-up — it should retain CF's warm strength while adding non-zero cold, unlike the TagSVD blend.
+7. **Linear hybrids lose to routing — both content sides.** EASE+TagSVD: best 1.2% warm @10 (TagSVD has zero warm signal → dilutes EASE). EASE+SBERT (now measured): better than the TagSVD blend (1.75% warm @10 / 4.45% @100 at α=0.7) AND gets *non-zero cold* (0.019% @10, 0.087% @100) — but still **loses to BPR on warm** (2.70/12.25) and **to SBERT on cold** (0.087/0.452). It beats neither parent on its home track. **Conclusion: model routing (BPR for warm, SBERT for cold) beats a single linear hybrid** — the architectural takeaway. (Cold is flat across α for the hybrid since cold items get content-only scoring.)
 
 See the notebooks linked at the top for the full iteration log (SBERT layers 2/3/4 sweeps with executed results).
+
+---
+
+## Statistical significance & CF tuning
+
+Point estimates alone don't say whether differences are real. We report **bootstrap 95% CIs**
+on every mean and **paired Wilcoxon signed-rank** tests for model-vs-model comparisons
+(non-parametric, paired on the same users — the standard recsys choice). Tooling:
+`src/eval/significance.py`. Reproduce: `uv run python -m src.eval.run_significance`
+(deterministic, seed=42; warm = 2,000-user sample, cold = full 10,393).
+
+### 95% bootstrap CIs — Recall@10
+
+| Model | Mean | 95% CI |
+|---|---|---|
+| Popularity (warm) | 2.95% | [2.25, 3.70] |
+| EASE (warm) | 2.90% | [2.15, 3.65] |
+| BPR (warm) | 2.70% | [2.00, 3.40] |
+| SBERT (cold) | 0.087% | [0.038, 0.144] |
+| Tag SVD (cold) | 0.010% | [0.000, 0.029] |
+
+The three warm CIs overlap almost completely.
+
+### Paired Wilcoxon (Recall@10)
+
+| Comparison | Δ (pp) | p-value | Significant @0.05 |
+|---|---|---|---|
+| BPR vs Popularity (warm) | −0.25 | 0.398 | ❌ |
+| EASE vs Popularity (warm) | −0.05 | 0.901 | ❌ |
+| BPR vs EASE (warm) | −0.20 | 0.612 | ❌ |
+| BPR vs Popularity (warm @100) | +0.70 | 0.157 | ❌ |
+| **SBERT vs Tag SVD (cold)** | **+0.077** | **0.011** | ✅ |
+
+**Only the cold-track content comparison is significant** — SBERT genuinely beats the
+structured-feature baseline on novel recipes. Every warm CF comparison is a statistical tie.
+
+### CF tuning — does any config beat Popularity? (No.)
+
+Swept EASE λ ∈ {50, 100, 250, 500, 1000} and BPR over factors × iters × lr (12 configs).
+Warm Recall@10 and the paired Wilcoxon p-value vs Popularity for each:
+
+| Model family | Best config | warm@10 | warm@100 | p vs Popularity |
+|---|---|---|---|---|
+| Popularity (baseline) | — | 2.95% | 11.55% | — |
+| EASE (λ sweep) | λ=500 | 2.95% | 8.50% | 1.00 |
+| BPR (grid) | k=200, it=1000, lr=.01 | 2.80% | 12.50% | 0.65 |
+| BPR (best @100) | k=200, it=500, lr=.01 | 2.70% | 12.75% | 0.35 |
+
+**All 17 configs: p > 0.07 — none significantly beats Popularity.** The warm CF ≈ Popularity
+result is a property of the sparse data, not under-tuning.
+
+### Stage 2 α-sweep — corner contrasts (paired Wilcoxon, BPR/warm, k=10)
+
+Unlike the Stage-1 model comparisons, **every α-sweep corner contrast is significant** —
+moving along the (αₜ, αₚ, αₙ) simplex changes the metrics in large, statistically real ways:
+
+| Contrast | Δ | p-value | Significant |
+|---|---|---|---|
+| Cookable-rate: pantry vs taste (33%→76%) | +42.75pp | 1.5×10⁻³¹⁰ | ✅ |
+| Relevance Recall@10: taste vs pantry | +1.20pp | 0.0047 | ✅ |
+| Relevance Recall@10: taste vs nutrition | +1.45pp | 0.0002 | ✅ |
+| Useful-rate: nutrition vs taste | +0.86pp | 3.6×10⁻²⁰ | ✅ |
+
+So the **taste ↔ constraint trade-off is statistically significant on all three axes** — the
+X-factor is a real effect, not visual noise. (Reproduce: `per_user_metrics` in
+`src/eval/alpha_sweep.py` + `paired_wilcoxon` in `src/eval/significance.py`.)
+
+> **Paired-test note for the defense:** for relevance, the *marginal* CIs overlap (taste
+> [2.0, 3.4] vs pantry [0.95, 2.05]) yet the *paired* test is significant (p=0.0047). No
+> contradiction — the comparison is paired (same users + pool, only α changes), so the
+> paired test removes between-user variance and detects the systematic shift the marginal
+> CIs hide. "Error bars overlap" is the wrong lens here.
+
+### What this means
+
+- **Stage 1: CF ≈ Popularity on warm** (tuned, significance-tested) → model choice barely
+  matters on this data. The architectural leverage is *not* Stage-1 CF.
+- **Stage 2: the constraint weighting matters a lot** — all corner contrasts significant.
+  The leverage is exactly where our contribution sits.
+- **SBERT significantly helps cold-start** (p=0.011) → the one statistically real *model* win,
+  backing the routing decision (content for novel recipes).
+- Absolute Stage-1 numbers are small because we rank against the **full catalogue** (~20K–231K
+  items; random Recall@10 ≈ 0.05%), not sampled negatives. Report the lift-over-random framing.
 
 ---
 

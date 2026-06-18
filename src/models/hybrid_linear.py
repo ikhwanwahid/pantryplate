@@ -55,12 +55,21 @@ class HybridLinearRecommender:
     positive_threshold : int
         Minimum rating treated as a positive when building Tag SVD user profiles.
     profile_strategy : str
-        Tag SVD profile aggregation: "mean", "rating_weighted", "recency_weighted".
+        Content profile aggregation: "mean", "rating_weighted", "recency_weighted".
+    content_model : {"tagsvd", "sbert"}
+        Which content sub-model to blend with EASE.
+        - "tagsvd" (default): 107-dim tag SVD + nutrition. Cheap, no warm signal.
+        - "sbert": 384-dim Sentence-BERT text embeddings. Stronger content side;
+          non-zero on cold AND a little warm signal, so the blend should retain
+          CF's warm strength better than the TagSVD blend. Slower to fit
+          (loads the cached embedding matrix). See leaderboard finding #7.
+        Both expose the same (_recipe_matrix, _user_vectors, _recipe_id_to_row,
+        recipe_ids) interface, so the blend logic below is identical for either.
     seed : int
         Passed through to EASE for contract parity (EASE is deterministic).
     feature_provider : callable or None
-        Override the Tag SVD feature loader. Mainly for injecting tiny synthetic
-        matrices in tests without loading the real 107-dim parquet.
+        Override the Tag SVD feature loader (only used when content_model=
+        "tagsvd"). Mainly for injecting tiny synthetic matrices in tests.
     """
 
     def __init__(
@@ -70,22 +79,26 @@ class HybridLinearRecommender:
         min_item_ratings: int = 10,
         positive_threshold: int = POSITIVE_THRESHOLD,
         profile_strategy: str = "mean",
+        content_model: str = "tagsvd",
         seed: int = 42,
         feature_provider=None,
     ):
         if not 0.0 <= alpha <= 1.0:
             raise ValueError(f"alpha must be in [0, 1], got {alpha}")
+        if content_model not in ("tagsvd", "sbert"):
+            raise ValueError(f"content_model must be 'tagsvd' or 'sbert', got {content_model!r}")
         self.alpha = alpha
         self.lambda_reg = lambda_reg
         self.min_item_ratings = min_item_ratings
         self.positive_threshold = positive_threshold
         self.profile_strategy = profile_strategy
+        self.content_model = content_model
         self.seed = seed
         self._feature_provider = feature_provider
 
         # Sub-models — populated by fit()
         self._ease: EASERecommender | None = None
-        self._content: TagSVDRecommender | None = None
+        self._content = None  # TagSVDRecommender | SentenceBERTRecommender
 
         # Vectorised bridge: maps EASE column indices ↔ content row indices
         # for items that appear in both catalogs (built once in fit).
@@ -113,14 +126,22 @@ class HybridLinearRecommender:
 
         # 2. Fit content sub-model (content_weight=1.0 = pure content;
         #    blending across CF and content happens here at the hybrid level)
-        content_kwargs: dict = dict(
-            positive_threshold=self.positive_threshold,
-            profile_strategy=self.profile_strategy,
-            content_weight=1.0,
-        )
-        if self._feature_provider is not None:
-            content_kwargs["feature_provider"] = self._feature_provider
-        self._content = TagSVDRecommender(**content_kwargs).fit(train_df)
+        if self.content_model == "sbert":
+            from src.models.sentence_bert import SentenceBERTRecommender
+            self._content = SentenceBERTRecommender(
+                positive_threshold=self.positive_threshold,
+                profile_strategy=self.profile_strategy,
+                content_weight=1.0,
+            ).fit(train_df)
+        else:
+            content_kwargs: dict = dict(
+                positive_threshold=self.positive_threshold,
+                profile_strategy=self.profile_strategy,
+                content_weight=1.0,
+            )
+            if self._feature_provider is not None:
+                content_kwargs["feature_provider"] = self._feature_provider
+            self._content = TagSVDRecommender(**content_kwargs).fit(train_df)
 
         # 3. Build the EASE-column → content-row bridge for vectorised score
         #    expansion. Items that exist only in EASE (not the feature parquet)

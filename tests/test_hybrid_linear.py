@@ -194,3 +194,62 @@ class TestAlphaBehaviour:
         # With orthogonal CF and content signals the full lists will differ;
         # top-1 might coincide by chance but top-10 as a set should not match.
         assert set(m0.recommend(uid, k=10)) != set(m1.recommend(uid, k=10))
+
+
+# ============================================================
+# content_model selection (tagsvd vs sbert)
+# ============================================================
+
+class _FakeContent:
+    """Minimal stand-in for a fitted SBERT/TagSVD content model.
+
+    Exposes exactly the attributes the hybrid blend reads, over a tiny
+    catalogue, so we can exercise the content_model="sbert" code path without
+    loading the real Sentence-BERT encoder / 339MB embedding cache.
+    """
+
+    def __init__(self, recipe_ids, user_ids, dim: int = 8, seed: int = 0):
+        rng = np.random.default_rng(seed)
+        self.recipe_ids = np.array(sorted(recipe_ids), dtype=np.int64)
+        self._recipe_id_to_row = {int(r): i for i, r in enumerate(self.recipe_ids)}
+        mat = rng.standard_normal((len(self.recipe_ids), dim)).astype(np.float32)
+        self._recipe_matrix = mat / (np.linalg.norm(mat, axis=1, keepdims=True) + 1e-9)
+        self._user_vectors = {}
+        for uid in user_ids:
+            v = rng.standard_normal(dim).astype(np.float32)
+            self._user_vectors[int(uid)] = v / (np.linalg.norm(v) + 1e-9)
+
+    def fit(self, train_df):  # the hybrid calls .fit(train_df) on the instance
+        return self
+
+
+class TestContentModelSelection:
+    def test_rejects_invalid_content_model(self):
+        with pytest.raises(ValueError, match="content_model"):
+            HybridLinearRecommender(content_model="bogus")
+
+    def test_default_is_tagsvd(self, tiny_train, fake_provider):
+        m = _make_model(tiny_train, fake_provider)
+        from src.models.tag_svd_content import TagSVDRecommender
+        assert isinstance(m._content, TagSVDRecommender)
+
+    def test_sbert_variant_routes_and_recommends(self, tiny_train, monkeypatch):
+        """content_model='sbert' should construct a SentenceBERTRecommender for
+        the content side and still produce a valid top-k."""
+        recipe_ids = tiny_train["recipe_id"].unique()
+        user_ids = tiny_train["user_id"].unique()
+        fake = _FakeContent(recipe_ids, user_ids)
+
+        # Patch the symbol imported inside fit (`from src.models.sentence_bert import ...`)
+        import src.models.sentence_bert as sb
+        monkeypatch.setattr(sb, "SentenceBERTRecommender", lambda **kw: fake)
+
+        m = HybridLinearRecommender(
+            alpha=0.5, lambda_reg=10.0, min_item_ratings=1, content_model="sbert",
+        ).fit(tiny_train)
+
+        assert m._content is fake  # SBERT path was taken
+        recs = m.recommend(1000, k=10)
+        assert len(recs) == 10
+        assert len(set(recs)) == 10
+        assert all(isinstance(r, int) for r in recs)
