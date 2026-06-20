@@ -9,7 +9,7 @@
 - **What this is**: graduate Recommender Systems course project. Multi-constraint recipe recommender.
 - **Final presentation**: 24 Jun 2026
 - **Proposal**: submitted 3 Jun 2026 → `PantryPlate_Proposal.pdf`
-- **Current phase**: Week 4 build sprint. Eval harness ✓ done. Stage 1 models pending (see `docs/week2_onboarding.md` §4b). Stage 2 reranker not yet started.
+- **Current phase**: Modeling + evaluation complete. Stage 1 (Popularity, MF/ALS, EASE, BPR, Tag SVD, SBERT, hybrids) ✓, Stage 2 reranker ✓, α-sweep ✓, significance tests ✓, Streamlit demo ✓. Remaining: slide deck, physical prop, dress rehearsal, pre-submission scrub. See `docs/stage1_leaderboard.md` for results.
 
 For a complete project overview, read **`README.md`** first, then **`docs/week2_onboarding.md`** (532 lines, comprehensive onboarding).
 
@@ -38,7 +38,7 @@ These have been decided with evidence and documented in `docs/data_decisions.md`
 2. **Dual-track evaluation**: warm-item LOO (Track A) + cold-item from authors' test (Track B). Use the harness.
 3. **0-star ratings are dropped** during loading (they're "review without rating" entries).
 4. **Positive rating threshold = 4 stars** for LOO holdout logic.
-5. **Stage 1 model menu is set**: Popularity, MF, EASE, BPR, Tag SVD content, Sentence-BERT, hybrid, two-tower (+ SASRec stretch). Don't propose adding/swapping models unless coordinated.
+5. **Stage 1 model menu (built)**: Popularity, MF/ALS, EASE, BPR, Tag SVD content, Sentence-BERT, hybrid linear. **Two-tower and SASRec were scoped in the proposal but NOT pursued** (out of scope — modeling is complete). Don't add models.
 6. **Pantry score uses non-staple overlap**; Useful Recall uses `missing_count ≤ 3`. Both live in `src/utils/staples.py`.
 7. **Diet is a hard filter applied at Stage 1's exit** via `filter_by_diet` in `src/reranker/filtering.py`. Stage 2's formula is `αₜ·s_taste + αₚ·s_pantry + αₙ·s_nutrition` (no `s_diet ×`). Stage 2 still reports `s_diet` per candidate for visibility, but doesn't use it in scoring. See decision §8 in `docs/data_decisions.md`.
 8. **Nutrition clipping** at (5000 kcal, 1000% PDV) — already in the loader.
@@ -144,24 +144,26 @@ Full workflow detail in `docs/week2_onboarding.md` §6 "Git workflow".
 
 ---
 
-## What's pending (as of 2026-06-04)
+## Status (as of 2026-06-18)
 
-If you're picking up work, these are the open workstreams in priority order:
+**Modeling + evaluation are done.** What's complete vs remaining:
 
-| # | Workstream | State | Notes |
-|---|---|---|---|
-| 1 | Content model PoC (Sentence-BERT) | Pending — assigned to Ikhwan | Pipeline validation; first content-aware model |
-| 2 | Stage 2 reranker scaffold | Pending — assigned to Ikhwan | 4 score functions + combiner; validates end-to-end with Sentence-BERT |
-| 3 | BPR (Cornac) | Open | Warm-track CF |
-| 4 | EASE | Open | Warm-track CF, closed-form |
-| 5 | Tag SVD content | Open | Cold-track content reference (features pre-built in `src/data/features.py`) |
-| 6 | Hybrid linear | Open (depends on #1 + #3 or #4) | Expected overall winner |
-| 7 | α-sweep experiments | Pending (after Stage 2) | Generates the headline plot |
-| 8 | Demo widget (Streamlit) | Pending | Week 5-6 work |
-| 9 | Slide deck updates | Pending | Replace placeholder Stage 1 results with real numbers |
-| 10 | Physical prop | Pending | Cook one of the recommended recipes |
+| Workstream | State |
+|---|---|
+| Stage 1 models (Popularity, MF/ALS, EASE, BPR, Tag SVD, SBERT, SBERT+TagSVD, hybrid linear) | ✅ done |
+| Stage 2 reranker (pantry/nutrition scorers + diet filter + combiner) | ✅ done |
+| α-sweep experiments + ternary heatmaps | ✅ done |
+| Statistical significance (bootstrap CIs + Wilcoxon) + CF tuning | ✅ done |
+| Streamlit demo (persona / walk-in / fridge-photo) | ✅ done |
+| End-to-end + per-model notebooks | ✅ done |
+| Slide deck updates | ⬜ deck team (unblocked — see `notebooks/pantryplate_e2e.ipynb`) |
+| Physical prop (cook a recommended recipe) | ⬜ pending |
+| Dress rehearsal | ⬜ pending |
+| Pre-submission AI-trace scrub | ⬜ pending (~Jun 23) |
 
-See `docs/week2_onboarding.md` §4b for the live coordination table with effort estimates and owners.
+**Not pursued** (scoped in the proposal, dropped for time): two-tower neural, SASRec/GRU4Rec sequential.
+
+Results live in `docs/stage1_leaderboard.md`. `docs/week2_onboarding.md` §4b has the (now-historical) model coordination table.
 
 ---
 

@@ -1,8 +1,7 @@
 """Recipe and user feature engineering for content-aware models.
 
 Builds compact, normalized feature representations of recipes (and users)
-suitable for use as item features in Stage 1 content / hybrid / two-tower
-models.
+suitable for use as item features in Stage 1 content and hybrid models.
 
 Pipelines:
 
@@ -17,7 +16,7 @@ model lanes. Fitted models (SVD, scaler, MLB) are saved as .pkl alongside.
 
 Originally developed by Anastasia Frances Frederica in
 notebooks/anastasia_kaggle.ipynb; ported here for reuse across Stage 1
-content/hybrid/two-tower model implementations.
+content and hybrid model implementations.
 
 Usage:
 

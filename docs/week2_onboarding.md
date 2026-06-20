@@ -19,7 +19,7 @@ PantryPlate is a multi-constraint recipe recommender. Stage 1 generates candidat
 | Proposal deck (final) | `PantryPlate_Proposal_v2.pdf` | The pitch — read the whole thing |
 | EDA + feasibility notebook | `notebooks/week1_eda.ipynb` | What we learned about the data; verdicts per pillar |
 | Walkthrough notebook | `notebooks/week1_walkthrough.ipynb` | Runnable code tour of the data loaders, metrics, popularity baseline |
-| Locked decisions register | `docs/data_decisions.md` | 11 decisions with evidence — read at least the summary table at the bottom |
+| Locked decisions register | `docs/data_decisions.md` | 12 decisions with evidence — read at least the summary table at the bottom |
 | **Harness usage guide** | `docs/eval_harness_usage.md` | How to plug your model into evaluation (5-min read) |
 
 If you only have 10 minutes: read **this doc** + the **summary table in data_decisions.md** + skim the **Useful Recall@K slide** in the proposal.
@@ -158,7 +158,7 @@ The 12 in one-liner form:
 2. **Dual-track evaluation**: warm-item LOO + cold-item from authors' test. The harness handles both via `track="warm"` / `track="cold"`.
 3. **Drop 0-star ratings** — they're "review without rating" entries. `load_train_interactions()` drops them by default.
 4. **Positive rating threshold = 4 stars** — for LOO holdout logic.
-5. **Stage 1 model menu** is set: Popularity, MF, EASE, BPR, Tag SVD content, Sentence-BERT, Hybrid linear, Two-tower neural (+ SASRec as stretch). Don't add models unless coordinated.
+5. **Stage 1 model menu (built)**: Popularity, MF/ALS, EASE, BPR, Tag SVD content, Sentence-BERT, Hybrid linear. Two-tower neural and SASRec were scoped but **not pursued** (dropped for time). Modeling is complete — don't add models.
 6. **CF-only models can be restricted to recipes with ≥10 ratings** for memory reasons (your call per model — see decision 6 in the register for the trade-off).
 7. **Pantry reranker score** is non-staple overlap (continuous); **Useful Recall pantry condition** is `missing_count ≤ 3`. Both live in `src/utils/staples.py`. You don't touch these in Stage 1.
 8. **Diet enforcement** is hard-filter (Week 4 work, not yours).
@@ -190,7 +190,11 @@ gh pr create --title "Claim <model>" --body "Section 4b update."
 
 ### Stage 1 models — coordination
 
-> 📊 **For current numbers**: see the [Stage 1 leaderboard](stage1_leaderboard.md) — living doc with Recall@10 + Recall@100 across val/warm/cold, updated whenever someone lands a new model. Bookmark it.
+> ✅ **STATUS (historical table): modeling is complete.** Every model below was built and
+> evaluated except **Two-tower neural** and **SASRec/GRU4Rec**, which were scoped here but
+> **not pursued** (deep/sequential stretch items, dropped for time). The table below is the
+> original Week-2 planning artifact, kept for record. **For final results see the
+> [Stage 1 leaderboard](stage1_leaderboard.md).**
 
 | Status | Priority | Model | Family | Effort | Difficulty | Source / hint | Why we want it | Owner |
 |---|---|---|---|---|---|---|---|---|
