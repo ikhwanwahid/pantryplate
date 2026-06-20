@@ -188,7 +188,7 @@ The harness calls `model.recommend(user_id, k=max(k_values), exclude_seen=True)`
 
 ### Cold-track Recall@K = 0 is correct for CF models
 
-If your BPR / EASE / MF model returns 0 on `track="cold"`, that's not a bug. The cold test items have zero rater history in train, so CF models have no signal. **Only content-aware models (TF-IDF, Sentence-BERT, hybrid, two-tower) can produce non-zero Recall on cold.**
+If your BPR / EASE / MF model returns 0 on `track="cold"`, that's not a bug. The cold test items have zero rater history in train, so CF models have no signal. **Only content-aware models (Tag SVD, Sentence-BERT, hybrid) can produce non-zero Recall on cold.**
 
 If you're evaluating a CF model and expect non-zero cold numbers — you're misunderstanding the setup. Re-read the data flow section.
 

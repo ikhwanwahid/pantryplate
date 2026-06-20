@@ -72,10 +72,10 @@ evaluation requiring content features.
 
 - **Test set**: 10,393 held-out positives, one per user, all on cold items
 - **Question**: "given a user's history, predict a recipe NO ONE has rated yet"
-- **Models that meaningfully compete**: TF-IDF, Sentence-BERT, hybrid, two-tower (content-aware only)
+- **Models that meaningfully compete**: Tag SVD, Sentence-BERT, hybrid (content-aware only)
 - **Floor**: popularity baseline → Recall@10 = 0.00% (by construction)
 - **Models that fail-by-design**: Popularity, MF, EASE, BPR (need item co-occurrence)
-- **Expected winners**: Sentence-BERT, two-tower, hybrid
+- **Actual cold winner**: Sentence-BERT (0.087% @10, significantly above Tag SVD)
 
 ### Why both
 
@@ -155,6 +155,12 @@ held out by virtue of having only one positive — see edge cases below).
 ---
 
 ## 5. Stage 1 model menu = 8 models (+ SASRec stretch)
+
+> **Status update (2026-06): two-tower neural and SASRec/GRU4Rec were NOT pursued**
+> (deep/sequential stretch items, dropped for time). The final built menu is Popularity,
+> MF/ALS, EASE, BPR, Tag SVD content, Sentence-BERT, and hybrid linear. The decision record
+> below is preserved as originally written; mentions of two-tower/NCF refer to the plan, not
+> the delivered set.
 
 **Decision**: The Stage 1 candidate-generator portfolio is:
 
