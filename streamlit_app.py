@@ -23,6 +23,7 @@ import pandas as pd
 import streamlit as st
 
 from src.reranker import Stage2Reranker, filter_by_diet
+from src.vision.expiry_model import assign_expiry_dates
 
 
 # =============================================================================
@@ -476,6 +477,9 @@ with st.sidebar:
                 tmp_path.unlink(missing_ok=True)
                 if detected:
                     st.session_state["cv_pantry"] = detected
+                    # Estimate expiry dates so the reranker can favour
+                    # soon-to-spoil items (opt-in via the checkbox below).
+                    st.session_state["pantry_expiry"] = assign_expiry_dates(detected)
                     st.success(f"Detected {len(detected)}: {', '.join(detected)}")
                 else:
                     st.warning("No ingredients detected — try another photo.")
@@ -488,6 +492,7 @@ with st.sidebar:
             st.caption(f"📷 detected: {', '.join(st.session_state['cv_pantry'])}")
             if st.button("Clear detected", use_container_width=True):
                 st.session_state.pop("cv_pantry", None)
+                st.session_state.pop("pantry_expiry", None)
 
     # Merge photo-detected ingredients into the pantry default (union, order:
     # mode defaults first, then any new detected items).
@@ -508,6 +513,17 @@ with st.sidebar:
         label_visibility="collapsed",
         help="Multi-select. Add or remove items — the persona's defaults are pre-loaded.",
     )
+
+    # Expiry-aware boosting only makes sense once a fridge photo has given us
+    # estimated expiry dates for detected items, so gate the toggle on that.
+    prioritize_expiring = False
+    if st.session_state.get("pantry_expiry"):
+        prioritize_expiring = st.checkbox(
+            "⏰ Prioritize ingredients about to expire",
+            value=False,
+            help="Boosts recipes that use detected fridge items close to their "
+                 "estimated expiry date. Estimates come from the fridge photo above.",
+        )
 
     st.markdown("**🚫 Dietary restrictions**")
     active_restrictions = st.multiselect(
@@ -548,6 +564,7 @@ with st.sidebar:
             "restrictions": active_restrictions,
             "exclude_from_staples": base_persona.get("exclude_from_staples", []),
             "taste_seeds": taste_seeds,
+            "pantry_expiry": st.session_state.get("pantry_expiry", {}) if prioritize_expiring else {},
         }
     else:
         active_persona = {
@@ -558,6 +575,7 @@ with st.sidebar:
             "restrictions": active_restrictions,
             "exclude_from_staples": [],
             "taste_seeds": [],
+            "pantry_expiry": st.session_state.get("pantry_expiry", {}) if prioritize_expiring else {},
         }
 
     st.markdown("---")

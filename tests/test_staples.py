@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import pytest
 
+from datetime import date, timedelta
+
 from src.utils.staples import (
     STAPLES,
     DAIRY_AND_EGGS,
     get_staples_for_persona,
     pantry_score,
+    pantry_score_with_expiry,
     missing_count,
 )
 
@@ -139,3 +142,42 @@ class TestPersonaIntegration:
         #   overlap = 0
         assert pantry_score({"salt", "flour", "chicken"}, persona["pantry"], staples) == 0.0
         assert missing_count({"salt", "flour", "chicken"}, persona["pantry"], staples) == 2
+
+
+class TestPantryScoreWithExpiry:
+    """The expiry-aware variant: identical to pantry_score unless given urgent
+    expiry dates, in which case it boosts (bounded by 1.0)."""
+
+    # 4 non-staples in the recipe; pantry owns 3 of them -> base = 0.75 < 1.0,
+    # so an urgency boost on the owned items is observable (not pre-clipped).
+    ings = ["chicken", "spinach", "tomato", "quinoa"]
+    pantry = ["chicken", "spinach", "tomato"]
+
+    def test_empty_expiry_matches_plain_pantry_score(self):
+        base = pantry_score(self.ings, self.pantry)
+        assert pantry_score_with_expiry(self.ings, self.pantry, pantry_expiry={}) == base
+        assert pantry_score_with_expiry(self.ings, self.pantry, pantry_expiry=None) == base
+
+    def test_far_future_expiry_does_not_boost(self):
+        base = pantry_score(self.ings, self.pantry)
+        far = {ing: date.today() + timedelta(days=60) for ing in self.pantry}
+        assert pantry_score_with_expiry(self.ings, self.pantry, pantry_expiry=far) == pytest.approx(base)
+
+    def test_urgent_items_boost_within_bounds(self):
+        base = pantry_score(self.ings, self.pantry)
+        soon = {ing: date.today() + timedelta(days=1) for ing in self.pantry}
+        boosted = pantry_score_with_expiry(self.ings, self.pantry, pantry_expiry=soon)
+        assert boosted > base
+        assert boosted <= 1.0
+
+    def test_boost_never_exceeds_one(self):
+        # Full overlap (base 1.0) plus max urgency -> stays clipped at 1.0
+        full = ["chicken", "spinach", "tomato"]
+        soon = {ing: date.today() for ing in full}
+        assert pantry_score_with_expiry(full, full, pantry_expiry=soon) == 1.0
+
+    def test_expiry_for_unmatched_item_is_ignored(self):
+        # expiry entry for an item not in the recipe∩pantry -> no boost
+        base = pantry_score(self.ings, self.pantry)
+        other = {"kiwi": date.today()}
+        assert pantry_score_with_expiry(self.ings, self.pantry, pantry_expiry=other) == pytest.approx(base)
