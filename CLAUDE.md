@@ -38,7 +38,7 @@ These have been decided with evidence and documented in `docs/data_decisions.md`
 2. **Dual-track evaluation**: warm-item LOO (Track A) + cold-item from authors' test (Track B). Use the harness.
 3. **0-star ratings are dropped** during loading (they're "review without rating" entries).
 4. **Positive rating threshold = 4 stars** for LOO holdout logic.
-5. **Stage 1 model menu (built)**: Popularity, MF/ALS, EASE, BPR, Tag SVD content, Sentence-BERT, hybrid linear. **Two-tower and SASRec were scoped in the proposal but NOT pursued** (out of scope — modeling is complete). Don't add models.
+5. **Stage 1 model menu (built)**: Popularity, MF/ALS, EASE, BPR, Tag SVD content, Sentence-BERT, hybrid linear. **Two-tower and SASRec were scoped in the proposal but NOT pursued** (out of scope — modeling is complete). Don't add models to the live pipeline. (Deep CF — LightGCN/NeuMF — was explored *post hoc* as a robustness check and still doesn't beat popularity; it's walled off in `experiments/deep_cf/`, NOT part of the sanctioned menu. See `docs/data_decisions.md` §5.)
 6. **Pantry score uses non-staple overlap**; Useful Recall uses `missing_count ≤ 3`. Both live in `src/utils/staples.py`.
 7. **Diet is a hard filter applied at Stage 1's exit** via `filter_by_diet` in `src/reranker/filtering.py`. Stage 2's formula is `αₜ·s_taste + αₚ·s_pantry + αₙ·s_nutrition` (no `s_diet ×`). Stage 2 still reports `s_diet` per candidate for visibility, but doesn't use it in scoring. See decision §8 in `docs/data_decisions.md`.
 8. **Nutrition clipping** at (5000 kcal, 1000% PDV) — already in the loader.

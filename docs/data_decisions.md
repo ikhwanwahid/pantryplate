@@ -161,6 +161,15 @@ held out by virtue of having only one positive — see edge cases below).
 > MF/ALS, EASE, BPR, Tag SVD content, Sentence-BERT, and hybrid linear. The decision record
 > below is preserved as originally written; mentions of two-tower/NCF refer to the plan, not
 > the delivered set.
+>
+> **Exploratory addendum (2026-06): deep CF (LightGCN + NeuMF)** was explored
+> *post hoc* as a robustness check and lands in the same band as popularity
+> (LightGCN warm Recall@10 ≈ 3.05 vs popularity 2.95; NeuMF worse; both 0 on
+> cold). It is **not** part of the sanctioned menu and is **not** wired into
+> `src/models/`, the harness registry, or the pipeline — it lives, walled off,
+> in `experiments/deep_cf/`. Kept only because the negative result strengthens
+> the "sparse data caps CF, regardless of model class" story. This does not
+> reopen the menu: don't add deep models to the live pipeline.
 
 **Decision**: The Stage 1 candidate-generator portfolio is:
 
