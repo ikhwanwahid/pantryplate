@@ -21,6 +21,7 @@ from src.utils.staples import (
     get_staples_for_persona,
     missing_count,
     pantry_score,
+    pantry_score_with_expiry,
 )
 
 
@@ -29,6 +30,7 @@ __all__ = [
     "get_staples_for_persona",
     "missing_count",
     "pantry_score",
+    "pantry_score_with_expiry",
     "nutrition_score",
     "diet_score",
     "diet_compliant",
