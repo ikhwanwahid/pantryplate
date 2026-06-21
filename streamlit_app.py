@@ -495,8 +495,9 @@ with st.sidebar:
                 st.session_state.pop("pantry_expiry", None)
                 st.session_state.pop("_last_cv_signature", None)
 
-    # Merge photo-detected ingredients into the pantry default (union, order:
-    # mode defaults first, then any new detected items).
+    # If a fridge photo produced detections, REPLACE the working pantry with them.
+    # Signature-gated so we only overwrite on a genuinely new scan, not on every
+    # Streamlit rerun (which would clobber the user's manual edits).
     if st.session_state.get("cv_pantry"):
         cv_signature = tuple(sorted(st.session_state["cv_pantry"]))
         if st.session_state.get("_last_cv_signature") != cv_signature:
@@ -507,14 +508,9 @@ with st.sidebar:
     # ----- editable inputs (same controls in both modes) ----------------
     st.markdown("**🥕 Pantry**")
 
+    # First run (no scan yet): seed the working pantry from the mode's defaults.
     if "active_pantry" not in st.session_state:
         st.session_state["active_pantry"] = default_pantry
-
-    if st.session_state.get("cv_pantry"):
-        cv_signature = tuple(sorted(st.session_state["cv_pantry"]))
-        if st.session_state.get("_last_cv_signature") != cv_signature:
-            st.session_state["active_pantry"] = sorted(st.session_state["cv_pantry"])
-            st.session_state["_last_cv_signature"] = cv_signature
 
     pantry_options = sorted(
         set(SUGGESTED_PANTRY)
