@@ -27,6 +27,7 @@ import pandas as pd
 import streamlit as st
 
 from src.reranker import Stage2Reranker, filter_by_diet
+from src.vision.expiry_model import assign_expiry_dates
 
 
 # =============================================================================
@@ -593,6 +594,9 @@ with st.sidebar:
                 tmp_path.unlink(missing_ok=True)
                 if detected:
                     st.session_state["cv_pantry"] = detected
+                    # Estimate expiry dates so the reranker can favour
+                    # soon-to-spoil items (opt-in via the checkbox below).
+                    st.session_state["pantry_expiry"] = assign_expiry_dates(detected)
                     st.success(f"Detected {len(detected)}: {', '.join(detected)}")
                 else:
                     st.warning("No ingredients detected — try another photo.")
@@ -605,26 +609,58 @@ with st.sidebar:
             st.caption(f"📷 detected: {', '.join(st.session_state['cv_pantry'])}")
             if st.button("Clear detected", use_container_width=True):
                 st.session_state.pop("cv_pantry", None)
+                st.session_state.pop("pantry_expiry", None)
+                st.session_state.pop("_last_cv_signature", None)
 
-    # Merge photo-detected ingredients into the pantry default (union, order:
-    # mode defaults first, then any new detected items).
+    # If a fridge photo produced detections, REPLACE the working pantry with them.
+    # Signature-gated so we only overwrite on a genuinely new scan, not on every
+    # Streamlit rerun (which would clobber the user's manual edits).
     if st.session_state.get("cv_pantry"):
-        merged = list(default_pantry)
-        for item in st.session_state["cv_pantry"]:
-            if item not in merged:
-                merged.append(item)
-        default_pantry = merged
+        cv_signature = tuple(sorted(st.session_state["cv_pantry"]))
+        if st.session_state.get("_last_cv_signature") != cv_signature:
+            st.session_state["active_pantry"] = sorted(st.session_state["cv_pantry"])
+            st.session_state["_last_cv_signature"] = cv_signature
+        default_pantry = st.session_state["cv_pantry"]
 
     # ----- editable inputs (same controls in both modes) ----------------
     st.markdown("**🥕 Pantry**")
-    pantry_options = sorted(set(SUGGESTED_PANTRY) | set(default_pantry))
+
+    # First run (no scan yet): seed the working pantry from the mode's defaults.
+    if "active_pantry" not in st.session_state:
+        st.session_state["active_pantry"] = default_pantry
+
+    pantry_options = sorted(
+        set(SUGGESTED_PANTRY)
+        | set(default_pantry)
+        | set(st.session_state["active_pantry"])
+    )
+
     active_pantry = st.multiselect(
         "What's in your kitchen?",
         options=pantry_options,
-        default=default_pantry,
+        key="active_pantry",
         label_visibility="collapsed",
         help="Multi-select. Add or remove items — the persona's defaults are pre-loaded.",
     )
+
+    if st.session_state.get("pantry_expiry"):
+        current_pantry_set = set(st.session_state.get("active_pantry", []))
+        st.session_state["pantry_expiry"] = {
+            ing: exp
+            for ing, exp in st.session_state["pantry_expiry"].items()
+            if ing in current_pantry_set
+        }
+
+    # Expiry-aware boosting only makes sense once a fridge photo has given us
+    # estimated expiry dates for detected items, so gate the toggle on that.
+    prioritize_expiring = False
+    if st.session_state.get("pantry_expiry"):
+        prioritize_expiring = st.checkbox(
+            "⏰ Prioritize ingredients about to expire",
+            value=False,
+            help="Boosts recipes that use detected fridge items close to their "
+                 "estimated expiry date. Estimates come from the fridge photo above.",
+        )
 
     st.markdown("**🚫 Dietary restrictions**")
     active_restrictions = st.multiselect(
@@ -665,6 +701,7 @@ with st.sidebar:
             "restrictions": active_restrictions,
             "exclude_from_staples": base_persona.get("exclude_from_staples", []),
             "taste_seeds": taste_seeds,
+            "pantry_expiry": st.session_state.get("pantry_expiry", {}) if prioritize_expiring else {},
         }
     elif mode == "Returning user":
         active_persona = {
@@ -685,6 +722,7 @@ with st.sidebar:
             "restrictions": active_restrictions,
             "exclude_from_staples": [],
             "taste_seeds": [],
+            "pantry_expiry": st.session_state.get("pantry_expiry", {}) if prioritize_expiring else {},
         }
 
     st.markdown("---")

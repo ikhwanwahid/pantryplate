@@ -42,7 +42,7 @@ from src.reranker.scores import (
     get_staples_for_persona,
     missing_count,
     nutrition_score,
-    pantry_score,
+    pantry_score_with_expiry,
 )
 
 
@@ -129,6 +129,8 @@ class Stage2Reranker:
         macro_targets = persona.get("macro_targets", {})
         restrictions = persona.get("restrictions", [])
         staples = get_staples_for_persona(persona)
+        # Optional {item: expiry_date} map (demo only). Empty -> plain pantry_score.
+        pantry_expiry = persona.get("pantry_expiry", {})
 
         # Pull Stage 1 taste scores into a numpy array aligned to cand_list
         raw_taste = np.array(
@@ -144,7 +146,11 @@ class Stage2Reranker:
             ings = getattr(row, "ingredients_parsed", None) or []
             tags = getattr(row, "tags_parsed", None) or []
             nutrition = getattr(row, "nutrition_parsed", None) or {}
-            s_pantry_arr.append(pantry_score(ings, user_pantry, staples=staples))
+            s_pantry_arr.append(
+                pantry_score_with_expiry(
+                    ings, user_pantry, pantry_expiry=pantry_expiry, staples=staples
+                )
+            )
             s_nutrition_arr.append(
                 nutrition_score(nutrition, macro_targets, tolerance=self.nutrition_tolerance)
             )

@@ -30,12 +30,9 @@ All values are **Recall@K × 100** (i.e. percentage). **Bold** marks the per-col
 
 `—` = not yet computed. CF @100 for BPR/EASE/ALS independently verified by reviewer; hybrid @100 pending.
 
-Missing entries (open workstreams):
-
-| Model | Owner | Status | Notes |
-|---|---|---|---|
-| Two-tower neural | TBD | ⬜ | Week 4-5 deep + multimodal |
-| SASRec / GRU4Rec (stretch) | TBD | ⬜ | Week 8 if green |
+**Modeling is complete** — the menu above is the final set evaluated. Two-tower neural and
+SASRec/GRU4Rec were scoped in the proposal but **not pursued** (dropped for time; deep/sequential
+models were the high-effort stretch items and the routing + α-sweep story stands without them).
 
 ---
 
