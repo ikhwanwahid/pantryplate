@@ -1,13 +1,17 @@
 """PantryPlate — Streamlit demo widget.
 
-Wraps Stage 1 (SBERT / Popularity routing) and Stage 2 (constraint reranker)
-into an interactive UI. Two modes:
+Wraps Stage 1 (SBERT / Popularity / BPR routing) and Stage 2 (constraint
+reranker) into an interactive UI. Three modes:
 
-    Persona mode   — pre-built characters with taste_seeds + pantry + macros
-    Walk-in mode   — audience volunteer types pantry + dietary preferences
+    Persona mode        — pre-built characters with taste_seeds + pantry + macros
+    Walk-in mode        — audience volunteer types pantry + dietary preferences
+    Returning user mode — a real Food.com user with genuine rating history;
+                          the only mode where Stage 1 routes to BPR (CF),
+                          since Persona/Walk-in are both new-user scenarios
+                          with no rating history for BPR to look up.
 
-Both flow through the same Stage 2 reranker. Three α sliders let the user
-explore the (αₜ, αₚ, αₙ) simplex live; the recommendations update on rerun.
+All three flow through the same Stage 2 reranker. Three α sliders let the
+user explore the (αₜ, αₚ, αₙ) simplex live; the recommendations update on rerun.
 
 Run:
     uv run streamlit run streamlit_app.py
@@ -151,10 +155,41 @@ st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 # Cached loaders — load expensive things once per session
 # =============================================================================
 
-@st.cache_resource(show_spinner="🍳 Loading PantryPlate models — first launch takes about 30 seconds...")
+# Curated real users (from data/raw/interactions_train.csv) with enough rating
+# history for BPR to have real signal, vetted by hand for a "nice" live demo —
+# decent taste-relevance AND decent pantry overlap, not an all-dessert list.
+RETURNING_USER_IDS = [67243, 360030, 185142]
+RETURNING_USER_PANTRY_SIZE = 30
+
+
+def _frequency_pantry(train_df, recipes_df, user_id: int, n: int = RETURNING_USER_PANTRY_SIZE,
+                      positive_threshold: int = 4) -> list[str]:
+    """Most frequently recurring non-staple ingredients across a real user's liked history.
+
+    The full union of every ingredient a user has ever cooked with balloons to
+    hundreds of items for an active user — not a presentable demo pantry.
+    Taking the most frequent N approximates "what they probably actually keep
+    on hand," matching the project's 25-35 item persona-pantry convention.
+    """
+    from collections import Counter
+
+    from src.utils.staples import STAPLES
+
+    pos = train_df[(train_df["user_id"] == user_id) & (train_df["rating"] >= positive_threshold)]
+    rids = [int(r) for r in pos["recipe_id"].to_numpy() if int(r) in recipes_df.index]
+    counter = Counter()
+    for ings in recipes_df.loc[rids, "ingredients_parsed"]:
+        if isinstance(ings, list):
+            counter.update(i for i in ings if isinstance(i, str) and i not in STAPLES)
+    return [item for item, _ in counter.most_common(n)]
+
+
+@st.cache_resource(show_spinner="🍳 Loading PantryPlate models — first launch takes a bit longer, BPR needs to train...")
 def load_models_and_data():
-    """Load recipes, fit Popularity + SBERT, load personas. Cached for the session."""
+    """Load recipes, fit Popularity + SBERT + BPR, load personas. Cached for the session."""
     from src.data.loader import load_recipes, load_train_interactions
+    from src.eval.alpha_sweep import derive_user_constraints
+    from src.models.bpr import BPRRecommender
     from src.models.popularity import PopularityRecommender
     from src.models.sentence_bert import SentenceBERTRecommender
 
@@ -167,6 +202,7 @@ def load_models_and_data():
     # Pass the already-parsed catalogue so fit() doesn't re-parse the 230K-row
     # recipe CSV a second time — roughly halves cold start.
     sbert = SentenceBERTRecommender(batch_size=256).fit(train, recipes_df=recipes_raw)
+    bpr = BPRRecommender(seed=42).fit(train)
 
     personas = {}
     for p_path in sorted(Path("data/personas").glob("*.json")):
@@ -179,12 +215,29 @@ def load_models_and_data():
     # exactly the case SBERT's cold-track training was meant to serve.
     rater_counts = train.groupby("recipe_id")["user_id"].nunique().to_dict()
 
+    # "Returning user" mode profiles — pantry + macro targets derived from each
+    # curated user's OWN rating history (same method as the α-sweep's
+    # derive_user_constraints), not hand-authored like a persona.
+    n_ratings_by_user = train.groupby("user_id").size()
+    returning_users = {}
+    for uid in RETURNING_USER_IDS:
+        macro_targets = derive_user_constraints(train, recipes, [uid])[uid]["macro_targets"]
+        returning_users[uid] = {
+            "pantry": _frequency_pantry(train, recipes, uid),
+            "macro_targets": macro_targets,
+            "n_ratings": int(n_ratings_by_user.get(uid, 0)),
+        }
+
     return {
         "recipes": recipes,
         "pop": pop,
         "sbert": sbert,
+        "bpr": bpr,
         "personas": personas,
         "rater_counts": rater_counts,
+        "returning_users": returning_users,
+        "train": train,
+        "user_rating_counts": n_ratings_by_user.to_dict(),
     }
 
 
@@ -341,8 +394,12 @@ data = load_models_and_data()
 recipes = data["recipes"]
 pop = data["pop"]
 sbert = data["sbert"]
+bpr = data["bpr"]
 personas = data["personas"]
 rater_counts = data["rater_counts"]
+returning_users = data["returning_users"]
+train_interactions = data["train"]
+user_rating_counts = data["user_rating_counts"]
 
 # Threshold for the novelty badge — "novel" = has < this many raters in train.
 # 10 is a nice midpoint: every cold (zero-rater) recipe plus emerging ones with
@@ -375,10 +432,12 @@ with st.sidebar:
 
     mode = st.radio(
         "Mode",
-        ["Persona", "Walk-in"],
+        ["Persona", "Walk-in", "Returning user"],
         index=0,
         help="**Persona**: choose a pre-built character (with taste_seeds).  \n"
-             "**Walk-in**: type a pantry & preferences live — the demo audience mode.",
+             "**Walk-in**: type a pantry & preferences live — the demo audience mode.  \n"
+             "**Returning user**: a real Food.com user with rating history — the only "
+             "mode where Stage 1 runs BPR (collaborative filtering) live.",
     )
 
     # Common pantry vocabulary — used as the multiselect options pool.
@@ -430,12 +489,69 @@ with st.sidebar:
         default_restrictions = base_persona["restrictions"]
         default_macros = base_persona["macro_targets"]
         taste_seeds = base_persona["taste_seeds"]  # hidden from UI; the persona's identity
+        selected_uid = None
+    elif mode == "Returning user":
+        selected_uid = st.selectbox(
+            "Pick a real user from the dataset",
+            options=RETURNING_USER_IDS,
+            format_func=lambda uid: f"User #{uid} — {returning_users[uid]['n_ratings']} ratings in train",
+            help="A real Food.com user with genuine rating history (not a synthetic persona). "
+                 "Stage 1 routes to BPR for this mode — the only place in the demo where "
+                 "collaborative filtering runs live, since Persona/Walk-in are both "
+                 "new-user scenarios with no history for BPR to use.",
+        )
+
+        typed_uid = st.number_input(
+            "Or type a specific user_id (0 = use the selection above)",
+            min_value=0, value=0, step=1,
+            help="Looks up any real user_id from interactions_train.csv. Users with few "
+                 "ratings will have weak BPR signal and a sparse derived pantry/macros.",
+        )
+        if typed_uid > 0:
+            typed_uid = int(typed_uid)
+            n_r = user_rating_counts.get(typed_uid, 0)
+            if n_r == 0:
+                st.warning(f"User #{typed_uid} has no ratings in train — using the dropdown selection instead.")
+            else:
+                selected_uid = typed_uid
+                if n_r < 20:
+                    st.warning(f"User #{typed_uid} only has {n_r} ratings — BPR signal may be weak "
+                               f"and the derived pantry/macros may look sparse.")
+                else:
+                    st.success(f"Using real user #{typed_uid} ({n_r} ratings in train).")
+
+        if selected_uid in returning_users:
+            ru = returning_users[selected_uid]
+        else:
+            # Custom typed user_id — derive live, same method as the curated ones.
+            from src.eval.alpha_sweep import derive_user_constraints
+            macro_targets = derive_user_constraints(
+                train_interactions, recipes, [selected_uid]
+            )[selected_uid]["macro_targets"]
+            ru = {
+                "pantry": _frequency_pantry(train_interactions, recipes, selected_uid),
+                "macro_targets": macro_targets,
+                "n_ratings": user_rating_counts.get(selected_uid, 0),
+            }
+
+        with st.expander("Why this user?"):
+            st.write(
+                f"A real user with {ru['n_ratings']} ratings in train. The pantry below is "
+                f"the {len(ru['pantry'])} most frequently recurring non-staple ingredients "
+                f"across their own 4★+ rated recipes — not hand-authored like a persona. "
+                f"Macro targets are the mean macros of those same liked recipes."
+            )
+        default_pantry = ru["pantry"]
+        default_restrictions = []
+        default_macros = ru["macro_targets"]
+        taste_seeds = []  # not used — Stage 1 calls BPR directly for this mode
     else:
         st.markdown("_No persona — Stage 1 will use SBERT on your pantry text._")
         default_pantry = ["chicken breast", "rice", "broccoli", "garlic", "olive oil"]
         default_restrictions = []
         default_macros = {"calories": 600}
         taste_seeds = []  # walk-in has no seeds
+        selected_uid = None
 
     # ----- optional: detect pantry from a fridge photo (CV inference) -----
     # Available in BOTH modes — it's just another way to fill the pantry.
@@ -586,6 +702,17 @@ with st.sidebar:
             "taste_seeds": taste_seeds,
             "pantry_expiry": st.session_state.get("pantry_expiry", {}) if prioritize_expiring else {},
         }
+    elif mode == "Returning user":
+        active_persona = {
+            "id": f"returning_user_{selected_uid}",
+            "label": f"Returning user #{selected_uid}",
+            "pantry": active_pantry,
+            "macro_targets": active_macros,
+            "restrictions": active_restrictions,
+            "exclude_from_staples": [],
+            "taste_seeds": [],
+            "pantry_expiry": st.session_state.get("pantry_expiry", {}) if prioritize_expiring else {},
+        }
     else:
         active_persona = {
             "id": "walkin_demo",
@@ -679,6 +806,9 @@ INITIAL_POOL = POOL_SIZE * OVERGEN_FACTOR if active_persona["restrictions"] else
 if mode == "Persona":
     initial_ids = sbert.recommend_for_seeds(active_persona["taste_seeds"], k=INITIAL_POOL)
     stage1_label = "SBERT(taste_seeds)"
+elif mode == "Returning user":
+    initial_ids = bpr.recommend(user_id=selected_uid, k=INITIAL_POOL, exclude_seen=True)
+    stage1_label = f"BPR(user #{selected_uid} rating history)"
 else:
     if not active_persona["pantry"]:
         initial_ids = pop.recommend(user_id=-1, k=INITIAL_POOL, exclude_seen=False)
