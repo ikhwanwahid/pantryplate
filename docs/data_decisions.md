@@ -1,12 +1,5 @@
 # PantryPlate — Locked Data & Modelling Decisions
 
-This document captures the decisions made during Week 1 (data sanity checks
-+ EDA + feasibility analysis) that should not be re-debated during
-implementation. Each decision lists the evidence behind it, where it
-applies in the code, and what happens if you find a reason to revisit it.
-
-Last updated: 2026-06-05 (added decision 12 — centralized recipe feature engineering).
-
 ---
 
 ## 1. Training cohort = authors' pre-split train (25K users)
@@ -24,26 +17,11 @@ the activity distribution within the cohort is:
 - **medium** (5-19):        ~9,500 users  (~38%)
 - **high**   (≥20):         ~5,100 users  (~21%)
 
-(verified via `classify_user_activity(load_train_interactions())` — see
-`src/data/features.py`). The authors' filter is "users with sufficient
-activity for the published evaluation"; the precise threshold isn't
-documented in the paper, but it is NOT a simple min-ratings cut.
-
-We previously used the raw interactions with our own `filter_active_users(min_ratings=5)`
-which produced 22,018 active users. The current approach uses the authors'
-published filter for consistency with the original paper. The wider activity
-spread is a feature: it lets us stratify Stage 1 results by user activity
-tier (cold-start vs. warm-start users) without rebuilding the cohort.
 
 **Where it applies**:
 - `src.data.loader.load_train_interactions()` — preferred
 - `src.data.loader.load_interactions()` + `filter_active_users()` — kept for
   raw-data exploration, no longer the default model-training path
-
-**If you want to revisit**: the authors' filter is "users with sufficient
-activity for the published evaluation"; the precise threshold isn't
-documented in the paper. The numbers (24,961 users / 698,901 interactions)
-are stable so we treat the filter as a fixed property of the dataset.
 
 ---
 
@@ -89,8 +67,6 @@ evaluation requiring content features.
 - Eval harness (Week 2 Day-1 deliverable) needs a `track` parameter to switch between warm/cold test sets
 - Reranker (Week 4) is track-agnostic
 
-**If you want to revisit**: drop Track B if proposal feedback says the cold-item story is too ambitious. Track A alone is still a complete project.
-
 ---
 
 ## 2. Drop 0-star interactions
@@ -126,9 +102,6 @@ time-based split to produce non-trivial test sets.
 - `src.data.loader.POSITIVE_THRESHOLD = 4`
 - `time_based_split` holds out the most recent rating with `rating >= 4`
 
-**If you want to revisit**: don't. This is a locked design decision in
-the README. Changing it would invalidate the headline metric comparisons.
-
 ---
 
 ## 4. Time-based, per-user, leave-one-out split (for Track A — warm)
@@ -148,9 +121,6 @@ held out by virtue of having only one positive — see edge cases below).
 - Users with no positives at all: kept entirely in train (no holdout)
 - Users with only one interaction: kept entirely in train (otherwise train would be empty for them)
 - Users where their only positive *is* their only interaction: same as above
-
-**Note**: this is the Track A split. Track B uses the authors' published
-`interactions_test.csv` directly (a cold-item evaluation; see decision 1b).
 
 ---
 
@@ -199,10 +169,6 @@ See the model rationale in `docs/proposal_deck_rebuild_brief.md` §2d.
 Each follows the same interface as `PopularityRecommender`: `.fit(train_df)`
 and `.recommend(user_id, k, exclude_seen=True)`.
 
-**If you want to revisit**: adding a model is fine if it answers a new
-question. Removing one needs a story about why its question is no longer
-worth answering.
-
 ---
 
 ## 6. Item filter for memory-bound CF models (EASE, BPR, two-tower)
@@ -223,9 +189,6 @@ popularity fallback at inference time.
 this pool before training. The eval harness will route requests for
 out-of-pool recipes through popularity automatically.
 
-**If you want to revisit**: ≥5 ratings would give 50,978 recipes
-(matrix ~10 GB — tight on 16 GB machines). Document any machine-specific
-choice that differs from this default.
 
 ---
 
@@ -434,9 +397,6 @@ pipelines: candidate generation is for *eligibility*, ranking is for
 
 **Where it applies**: `src.data.ingredients.parse_nutrition(clip=True, calorie_cap=5000, pdv_cap=1000)` — these are the defaults.
 
-**If you want to revisit**: tighten the calorie cap to 3000 if a reviewer
-finds the 5000 still includes obvious miscounts. Loosening doesn't help.
-
 ---
 
 ## 10. Persona pantries should be 25-35 user-specific items
@@ -566,15 +526,6 @@ our `load_train_interactions()` cohort.
 - `data/processed/{tag_svd_model,nutrition_scaler,tag_mlb}.pkl` — fitted transforms
 - `tests/test_features.py` — 14 tests covering tag selection, SVD, nutrition, user tiers
 
-### If you want to revisit
-
-- Bumping `n_components` from 100 to 200 is fine if a downstream model
-  shows it helps (the SVD is fast enough to re-fit). Document it.
-- Adding text features (ingredient bag-of-words, name embeddings, etc.)
-  should extend this matrix, not create a parallel pipeline.
-- Sentence-BERT embeddings will be a separate file (`recipe_sbert.parquet`)
-  because their 384-dim vectors deserve their own representation; the
-  hybrid model can concatenate the two as needed.
 
 ---
 
