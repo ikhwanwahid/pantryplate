@@ -6,7 +6,7 @@ A graduate Recommender Systems course project (CS608, Project 2). Studies how re
 
 **Status**: proposal submitted (3 Jun 2026); final presentation 24 Jun 2026. **Modeling + evaluation complete** — Stage 1 models, Stage 2 reranker, α-sweep, and significance tests all done. See `docs/stage1_leaderboard.md` for results and `notebooks/pantryplate_e2e.ipynb` for the full walkthrough.
 
-> **AI assistants**: read `CLAUDE.md` first. It captures conventions, locked decisions, and pending workstreams. Then read `docs/week2_onboarding.md` for the comprehensive engineering onboarding.
+> **New to the project?** Read `docs/week2_onboarding.md` for the comprehensive engineering onboarding — conventions, locked decisions, and the model contract.
 
 ---
 
@@ -301,7 +301,7 @@ Both notebooks are pre-executed with outputs included — you can read them with
 | 6 | Jun 17–23 | Demo widget + slide polish + physical prop + dress rehearsal | Pending |
 | — | **Jun 24** | **Final presentation** | — |
 
-The compressed Week-4-6 execution requires sharp scoping. See `docs/week2_onboarding.md` §4b for the Stage 1 model claim table and `CLAUDE.md` for the current state summary.
+The compressed Week-4-6 execution requires sharp scoping. See `docs/week2_onboarding.md` §4b for the Stage 1 model claim table and current state summary.
 
 ---
 
