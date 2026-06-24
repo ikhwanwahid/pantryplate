@@ -6,8 +6,6 @@ A graduate Recommender Systems course project (CS608, Project 2). Studies how re
 
 **Status**: proposal submitted (3 Jun 2026); final presentation 24 Jun 2026. **Modeling + evaluation complete** — Stage 1 models, Stage 2 reranker, α-sweep, and significance tests all done. See `docs/stage1_leaderboard.md` for results and `notebooks/pantryplate_e2e.ipynb` for the full walkthrough.
 
-> **New to the project?** Read `docs/week2_onboarding.md` for the comprehensive engineering onboarding — conventions, locked decisions, and the model contract.
-
 ---
 
 ## What this project does
@@ -188,27 +186,6 @@ The detected ingredient labels are normalized to match Food.com vocabulary via `
 
 ---
 
-## For contributors joining the project
-
-**Start here**: [`docs/week2_onboarding.md`](docs/week2_onboarding.md).
-
-That doc covers:
-
-- Project recap (1 paragraph)
-- Pointers to deeper reading (proposal deck, EDA notebook, walkthrough)
-- ⭐ **The data routing** — which CSV file feeds which evaluation track. This is the single most-misunderstood thing in the project; read it twice.
-- The Stage 1 model interface contract
-- The 12 locked decisions you must respect
-- Numbers your model should beat (popularity floor: Recall@10 ≈ 3.0%)
-- Conventions (naming, file structure, determinism, where to commit)
-- Quickstart template for new models
-
-After onboarding:
-- Plug your Stage 1 model into the harness via [`docs/eval_harness_usage.md`](docs/eval_harness_usage.md).
-- Drop your model's numbers into the **[Stage 1 leaderboard](docs/stage1_leaderboard.md)** — living doc that's the source of truth on model performance.
-
----
-
 ## Key concepts (quick reference)
 
 ### Dual-track evaluation
@@ -278,30 +255,6 @@ uv run jupyter lab
 ```
 
 Both notebooks are pre-executed with outputs included — you can read them without re-running. Re-execution requires the Food.com data in `data/raw/`.
-
----
-
-## Timeline
-
-**Original plan** (Week 1–3 went into data, EDA, and proposal deck — Stage 1 model implementation was deferred):
-
-| Week | Dates | Focus | Status |
-|---|---|---|---|
-| 1 | May 13–19 | Data pipeline, sanity checks, EDA, feasibility analysis | ✅ Done |
-| 2 | May 20–26 | (planned: Stage 1 models) → focused on EDA refinement + proposal deck v1-v5 | Replanned |
-| 3 | May 27–Jun 2 | (planned: hybrid + results) → proposal deck finalization | Replanned |
-| — | **Jun 3** | **Proposal submitted** | ✅ Done |
-
-**Remaining 3-week execution sprint** (where we are now):
-
-| Week | Dates | Focus | Status |
-|---|---|---|---|
-| 4 | **Jun 3–9** | Eval harness ✅ + onboarding docs ✅ + 3 personas ✅ + Stage 1 models start | 🟡 Active |
-| 5 | Jun 10–16 | Stage 2 reranker + α-sweep + per-persona analysis + CV inference ✅ | 🟡 Active |
-| 6 | Jun 17–23 | Demo widget + slide polish + physical prop + dress rehearsal | Pending |
-| — | **Jun 24** | **Final presentation** | — |
-
-The compressed Week-4-6 execution requires sharp scoping. See `docs/week2_onboarding.md` §4b for the Stage 1 model claim table and current state summary.
 
 ---
 
