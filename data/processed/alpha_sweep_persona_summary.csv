@@ -1,0 +1,10 @@
+persona,metric,best_alpha_taste,best_alpha_pantry,best_alpha_nutrition,best_value
+fitness_focused,recall@10,1.0,0.0,0.0,0.027
+fitness_focused,feasible_rate@10,0.4,0.6,0.0,0.5412
+fitness_focused,useful_rate@10,0.0,0.0,1.0,0.0
+vegan_busy,recall@10,1.0,0.0,0.0,0.027
+vegan_busy,feasible_rate@10,0.5,0.5,0.0,0.5260000000000006
+vegan_busy,useful_rate@10,0.0,0.0,1.0,0.0
+family_friendly,recall@10,0.7,0.05,0.25,0.03
+family_friendly,feasible_rate@10,0.0,1.0,0.0,0.9115000000000062
+family_friendly,useful_rate@10,0.0,0.0,1.0,5e-05
