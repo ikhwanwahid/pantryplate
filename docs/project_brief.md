@@ -256,5 +256,4 @@ After this week, you'll know whether to commit to the project as scoped or adjus
 ## Reference documents
 
 - Proposal slide deck: `PantryPlate_Proposal.pptx` (separately delivered)
-- Discussion history: see `chat-history-summary.md` if attached
 - Course context: 11-week course, Project 2 proposal at Week 7, presentation at Week 10
