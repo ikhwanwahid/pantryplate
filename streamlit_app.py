@@ -712,6 +712,7 @@ with st.sidebar:
             "restrictions": active_restrictions,
             "exclude_from_staples": [],
             "taste_seeds": [],
+            "pantry_expiry": st.session_state.get("pantry_expiry", {}) if prioritize_expiring else {},
         }
     else:
         active_persona = {
